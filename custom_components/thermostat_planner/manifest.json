@@ -4,10 +4,10 @@
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["http", "frontend", "websocket_api"],
-  "documentation": "https://github.com/YOUR_USER/thermostat-planner",
+  "documentation": "https://github.com/icebas11/thermostat-planner",
   "integration_type": "service",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/YOUR_USER/thermostat-planner/issues",
+  "issue_tracker": "https://github.com/icebas11/thermostat-planner/issues",
   "requirements": [],
   "version": "0.1.0"
 }
