@@ -486,7 +486,8 @@
       const segs = s.data.profiles[profileName].schedules[sec.key];
       const ivs = intervals(segs);
       const id = `${profileName}:${sec.key}`;
-      const open = this._open[id] !== undefined ? this._open[id] : sec.today;
+      const expandToday = !this._config || this._config.expand_today !== false;
+      const open = this._open[id] !== undefined ? this._open[id] : sec.today && expandToday;
       const showNow = sec.today && profileName === s.effective_mode;
       const nowDate = new Date();
       const nowPct = ((nowDate.getHours() * 60 + nowDate.getMinutes()) / 1440) * 100;

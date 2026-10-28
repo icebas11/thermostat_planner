@@ -33,6 +33,7 @@ Copie `custom_components/thermostat_planner/` dans `<config>/custom_components/`
 ```yaml
 type: custom:thermostat-planner-card
 title: Planning chauffage   # facultatif
+expand_today: false         # facultatif : ne pas déplier le jour en cours (true par défaut)
 ```
 
 ## Fonctionnement
