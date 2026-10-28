@@ -1,0 +1,14 @@
+set_mode:
+  name: Définir le mode
+  description: Choisit le mode manuel (Maison ou Absent).
+  fields:
+    mode:
+      name: Mode
+      description: home ou away.
+      required: true
+      example: away
+      selector:
+        select:
+          options:
+            - home
+            - away

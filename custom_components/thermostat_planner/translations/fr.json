@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Thermostat Planner",
+        "data": {
+          "climate_entity": "Thermostat",
+          "away_entity": "Entité qui force le mode Absent (facultatif)",
+          "away_state": "État signifiant Absent"
+        },
+        "data_description": {
+          "away_state": "Pour une entité person : not_home ; pour un interrupteur ou une alarme : on, armed_away, etc."
+        }
+      }
+    },
+    "abort": { "already_configured": "Thermostat Planner est déjà configuré." }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Thermostat Planner",
+        "data": {
+          "climate_entity": "Thermostat",
+          "away_entity": "Entité qui force le mode Absent (facultatif)",
+          "away_state": "État signifiant Absent"
+        }
+      }
+    }
+  }
+}

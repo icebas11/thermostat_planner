@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Thermostat Planner",
+        "data": {
+          "climate_entity": "Thermostat",
+          "away_entity": "Entity that forces Away mode (optional)",
+          "away_state": "State meaning Away"
+        },
+        "data_description": {
+          "away_state": "For a person entity use not_home; for a switch or alarm use on, armed_away, etc."
+        }
+      }
+    },
+    "abort": { "already_configured": "Thermostat Planner is already configured." }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Thermostat Planner",
+        "data": {
+          "climate_entity": "Thermostat",
+          "away_entity": "Entity that forces Away mode (optional)",
+          "away_state": "State meaning Away"
+        }
+      }
+    }
+  }
+}
