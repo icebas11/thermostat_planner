@@ -34,7 +34,26 @@ Copie `custom_components/thermostat_planner/` dans `<config>/custom_components/`
 type: custom:thermostat-planner-card
 title: Planning chauffage   # facultatif
 expand_today: false         # facultatif : ne pas déplier le jour en cours (true par défaut)
+colors:                     # facultatif : couleur des plages par paliers de température
+  - max: 18
+    color: "#3b82f6"
+  - max: 22
+    color: "#22c55e"
+  - color: "#f97316"        # pas de borne = tout le reste
 ```
+
+### Couleurs par paliers
+Chaque palier accepte `min` et/ou `max` (bornes **incluses**, en °C), `color` (obligatoire, toute couleur CSS)
+et `text_color` (facultatif, sinon noir ou blanc selon le contraste). Le **premier** palier qui correspond
+s'applique ; une température qui ne correspond à aucun palier garde le dégradé par défaut (bleu → ambre).
+
+Avec l'exemple ci-dessus : ≤ 18 ° → bleu, 18,5 à 22 ° → vert, ≥ 22,5 ° → orange.
+
+### Largeur
+Dans la vue **Sections**, la carte prend par défaut toute la largeur de la section, même si elle s'étend sur plusieurs colonnes (minimum 6 colonnes) ;
+la taille reste modifiable dans l'onglet *Disposition* de l'éditeur. Le contenu s'adapte à la largeur :
+graduations de l'axe plus fines, températures affichées dans les plages courtes quand la place le permet,
+et liste des plages sur plusieurs colonnes sur les cartes larges.
 
 ## Fonctionnement
 - Une journée est une suite de plages qui couvre **0h → 24h** ; chaque plage dure jusqu'au début de la suivante.

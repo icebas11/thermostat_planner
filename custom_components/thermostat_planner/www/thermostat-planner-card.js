@@ -1,4 +1,4 @@
-/* Thermostat Planner card — v0.1.0
+/* Thermostat Planner card — v0.2.1
  * Carte Lovelace sans dépendance : planning par plages horaires,
  * modes Maison / Absent, 3 modes de programmation des jours.
  */
@@ -188,8 +188,65 @@
     profile.layout = next;
   }
 
-  /** Bleu-vert (froid) → ambre (chaud). */
-  function tempColors(t) {
+  let colorCtx = null;
+  /** Couleur CSS → [r, g, b] (0-255), ou null si non résoluble (ex. var(--x)). */
+  function rgbOf(color) {
+    try {
+      colorCtx = colorCtx || document.createElement("canvas").getContext("2d");
+      const sentinel = "#010203";
+      colorCtx.fillStyle = sentinel;
+      colorCtx.fillStyle = color;
+      const v = colorCtx.fillStyle;
+      if (v === sentinel && String(color).toLowerCase() !== sentinel) return null;
+      if (v.startsWith("#")) return [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16));
+      const m = v.match(/\d+(\.\d+)?/g);
+      return m ? m.slice(0, 3).map(Number) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Texte noir ou blanc selon la luminance du fond. */
+  function textOn(color) {
+    const rgb = rgbOf(color);
+    if (!rgb) return "#fff";
+    const [r, g, b] = rgb.map((c) => {
+      const x = c / 255;
+      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.179 ? "rgba(0,0,0,.85)" : "#fff";
+  }
+
+  /** Valide et prépare l'option `colors` : [{ min?, max?, color, text_color? }]. */
+  function parseScale(colors) {
+    if (colors === undefined || colors === null) return null;
+    if (!Array.isArray(colors)) throw new Error("thermostat-planner-card: `colors` doit être une liste");
+    return colors.map((c, i) => {
+      if (!c || typeof c.color !== "string" || !c.color)
+        throw new Error(`thermostat-planner-card: colors[${i}].color est requis`);
+      const num = (k) => {
+        if (c[k] === undefined || c[k] === null) return undefined;
+        const n = Number(c[k]);
+        if (Number.isNaN(n)) throw new Error(`thermostat-planner-card: colors[${i}].${k} doit être un nombre`);
+        return n;
+      };
+      return {
+        min: num("min"),
+        max: num("max"),
+        bg: c.color,
+        fg: c.text_color || textOn(c.color),
+        accent: c.color,
+        tint: `color-mix(in srgb, ${c.color} 16%, transparent)`,
+      };
+    });
+  }
+
+  /** Palier configuré (premier qui correspond), sinon dégradé bleu-vert (froid) → ambre (chaud). */
+  function tempColors(t, scale) {
+    const hit =
+      scale &&
+      scale.find((c) => (c.min === undefined || t >= c.min) && (c.max === undefined || t <= c.max));
+    if (hit) return hit;
     const r = Math.max(0, Math.min(1, (t - 10) / 14));
     const h = Math.round(192 - r * 150);
     return {
@@ -265,11 +322,12 @@
     .axis span:first-child { transform: none; }
     .axis span:last-child { transform: translateX(-100%); }
 
-    .blocks { display: none; padding: 6px 16px 4px; }
-    .section.open .blocks { display: block; }
+    .blocks { display: none; padding: 6px 16px 12px; gap: 8px;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+    .section.open .blocks { display: grid; }
     .block { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;
       text-align: left; border: 0; border-left: 4px solid var(--accent); background: var(--tint);
-      border-radius: 4px 14px 14px 4px; padding: 12px 14px; margin-bottom: 8px; }
+      border-radius: 4px 14px 14px 4px; padding: 12px 14px; }
     .block .range, .block .deg { display: block; }
     .block .range { font-size: 1.0625rem; font-weight: 500; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
     .block .deg { font-size: .9375rem; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
@@ -340,12 +398,27 @@
     }
 
     setConfig(config) {
+      this._scale = parseScale(config && config.colors);
       this._config = { ...config };
       this._render();
     }
 
     getCardSize() {
       return 8;
+    }
+
+    // Vue « sections » : toute la largeur de la section (même sur 2+ colonnes), hauteur automatique.
+    getGridOptions() {
+      return { columns: "full", min_columns: 6 };
+    }
+
+    /** Seuils d'affichage dépendant de la largeur réelle de la barre. */
+    _barMetrics() {
+      const bw = this._width ? this._width - 64 : 0; // padding ha-card + bar-wrap
+      return {
+        labelMinPct: bw ? (44 / bw) * 100 : 9,
+        tickStep: bw >= 640 ? 2 : bw >= 340 ? 4 : 8,
+      };
     }
 
     set hass(hass) {
@@ -358,9 +431,19 @@
 
     connectedCallback() {
       if (this._hass && !this._unsub && !this._subscribing) this._subscribe();
+      if (!this._ro && window.ResizeObserver) {
+        this._ro = new ResizeObserver((entries) => {
+          const w = Math.round(entries[0].contentRect.width / 20) * 20;
+          if (!w || w === this._width) return;
+          this._width = w;
+          if (!this._modal) this._render();
+        });
+      }
+      if (this._ro) this._ro.observe(this);
     }
 
     disconnectedCallback() {
+      if (this._ro) this._ro.disconnect();
       if (this._unsub) {
         this._unsub();
         this._unsub = null;
@@ -491,17 +574,20 @@
       const showNow = sec.today && profileName === s.effective_mode;
       const nowDate = new Date();
       const nowPct = ((nowDate.getHours() * 60 + nowDate.getMinutes()) / 1440) * 100;
+      const { labelMinPct, tickStep } = this._barMetrics();
 
       const bar = ivs
         .map((iv) => {
           const w = ((iv.e - iv.s) / 1440) * 100;
-          const c = tempColors(iv.t);
-          return `<div class="seg" style="width:${w}%;--bg:${c.bg};--fg:${c.fg}">${w >= 9 ? this._fmt(iv.t) + "°" : ""}</div>`;
+          const c = tempColors(iv.t, this._scale);
+          return `<div class="seg" style="width:${w}%;--bg:${c.bg};--fg:${c.fg}">${w >= labelMinPct ? this._fmt(iv.t) + "°" : ""}</div>`;
         })
         .join("");
+      const ticks = [];
+      for (let h = 0; h <= 24; h += tickStep) ticks.push(`<span style="left:${(h / 24) * 100}%">${h}:00</span>`);
       const blocks = ivs
         .map((iv, i) => {
-          const c = tempColors(iv.t);
+          const c = tempColors(iv.t, this._scale);
           return `<button class="block" data-action="edit" data-profile="${profileName}" data-key="${sec.key}" data-index="${i}" style="--accent:${c.accent};--tint:${c.tint}">
             <span><span class="range">${toStr(iv.s)} – ${toStr(iv.e)}</span><span class="deg">${this._fmt(iv.t)}°</span></span></button>`;
         })
@@ -514,7 +600,7 @@
         </button>
         <div class="bar-wrap">
           <div class="bar">${bar}${showNow ? `<div class="now" style="left:${nowPct}%"></div>` : ""}</div>
-          <div class="axis"><span style="left:0">0:00</span><span style="left:33.333%">8:00</span><span style="left:66.667%">16:00</span><span style="left:100%">24:00</span></div>
+          <div class="axis">${ticks.join("")}</div>
         </div>
         <div class="blocks">${blocks}</div>
         <div class="tools">
@@ -720,7 +806,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, keyFor, toMin, toStr, tempColors };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, keyFor, toMin, toStr, tempColors, parseScale };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);

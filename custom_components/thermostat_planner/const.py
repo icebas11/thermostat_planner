@@ -1,7 +1,7 @@
 """Constantes de Thermostat Planner."""
 
 DOMAIN = "thermostat_planner"
-VERSION = "0.1.0"
+VERSION = "0.2.1"
 
 CONF_CLIMATE = "climate_entity"
 CONF_AWAY_ENTITY = "away_entity"
