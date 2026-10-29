@@ -7,6 +7,7 @@ plages horaires colorées par température, modes **Maison** / **Absent**, et tr
 - **Deux profils** (Maison, Absent), chacun avec son propre planning.
 - **Programmation des jours** : tous les jours · semaine + week-end · chaque jour indépendamment.
 - **Plages** : ajouter, modifier (début, fin, température), supprimer, copier/coller un jour.
+- **Réglage immédiat** : boutons − / + sur la carte pour déroger au planning jusqu'à la prochaine plage.
 - **Passage en Absent** : manuel (interrupteur sur la carte) et/ou automatique via une entité de ton choix.
 
 ## Installation
@@ -36,6 +37,8 @@ Copie `custom_components/thermostat_planner/` dans `<config>/custom_components/`
 type: custom:thermostat-planner-card
 title: Planning chauffage   # facultatif
 expand_today: false         # facultatif : ne pas déplier le jour en cours (true par défaut)
+show_controls: true         # facultatif : boutons − / + de réglage immédiat (true par défaut)
+override_duration: 120      # facultatif : durée d'une dérogation en minutes (par défaut : jusqu'à la prochaine plage)
 colors:                     # facultatif : couleur des plages par paliers de température
   - max: 18
     color: "#3b82f6"
@@ -51,6 +54,20 @@ s'applique ; une température qui ne correspond à aucun palier garde le dégrad
 
 Avec l'exemple ci-dessus : ≤ 18 ° → bleu, 18,5 à 22 ° → vert, ≥ 22,5 ° → orange.
 
+### Réglage immédiat (dérogation)
+En haut de la carte, les boutons **−** / **+** modifient la consigne du thermostat, au pas et dans les bornes
+du thermostat (`target_temp_step`, `min_temp`, `max_temp`). La consigne est envoyée **1 s après le dernier appui**.
+Il s'agit d'une **dérogation** :
+- elle dure jusqu'à la **prochaine plage** (ou `override_duration` minutes), puis le planning reprend tout seul ;
+- elle est annulée si le mode effectif change (Maison ↔ Absent) ;
+- elle est mémorisée et survit à un redémarrage ;
+- elle s'applique même planification en pause (dans ce cas, rien n'est renvoyé à son expiration) ;
+- **Reprendre le planning** l'annule et renvoie aussitôt la consigne de la plage en cours ; revenir avec − / + à
+  la consigne prévue fait de même.
+
+Sans dérogation, si la consigne du thermostat diffère du planning (réglage fait directement sur l'appareil),
+la carte affiche « Planning 18° » sous les boutons. L'icône de flamme indique si le thermostat chauffe (`hvac_action`).
+
 ### Largeur
 Dans la vue **Sections**, la carte prend par défaut toute la largeur de la section, même si elle s'étend sur plusieurs colonnes (minimum 6 colonnes) ;
 la taille reste modifiable dans l'onglet *Disposition* de l'éditeur. Le contenu s'adapte à la largeur :
@@ -64,12 +81,15 @@ et liste des plages sur plusieurs colonnes sur les cartes larges.
 - La consigne est envoyée **une fois par plage**, et la plage appliquée est mémorisée (`.storage/thermostat_planner.applied`). Après un redémarrage de Home Assistant ou une coupure du thermostat :
   - si on est toujours dans la même plage, rien n'est renvoyé : un réglage manuel est conservé ;
   - si une nouvelle plage a commencé entre-temps, ou si l'envoi avait échoué, la consigne est envoyée **dès que le thermostat redevient disponible**.
+- Une **dérogation** en cours prime sur le planning (voir *Réglage immédiat*). Elle est enregistrée dans `.storage/thermostat_planner.override`.
 - Des plages consécutives à la même température comptent comme une seule (ex. 23:00 → 00:00 à 18 °C : pas de renvoi à minuit).
 - Le planning est enregistré dans `.storage/thermostat_planner.data`.
 
 ## Entités et services
-- `sensor.thermostat_planner_mode` : `home` ou `away`. Attributs : `manual_mode`, `forced_by_entity`, `target_temperature`, `next_change`, `enabled`.
+- `sensor.thermostat_planner_mode` : `home` ou `away`. Attributs : `manual_mode`, `forced_by_entity`, `target_temperature` (consigne prévue par le planning), `next_change`, `override_temperature`, `override_until`, `enabled`.
 - Service `thermostat_planner.set_mode` (`mode: home | away`) pour tes automatisations.
+- Service `thermostat_planner.set_override` (`temperature`, `duration` facultative, ex. `"02:00:00"`) : dérogation jusqu'à la prochaine plage ou pendant la durée donnée.
+- Service `thermostat_planner.clear_override` : reprend le planning.
 
 ## Limites de cette première version
 - Un seul thermostat.

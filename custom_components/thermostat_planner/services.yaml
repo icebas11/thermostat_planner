@@ -12,3 +12,30 @@ set_mode:
           options:
             - home
             - away
+
+set_override:
+  name: Déroger au planning
+  description: Impose une consigne jusqu'à la prochaine plage (ou pendant la durée indiquée). Annulée si le mode Maison / Absent change.
+  fields:
+    temperature:
+      name: Température
+      description: Consigne à appliquer (°C).
+      required: true
+      example: 21
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 0.5
+          unit_of_measurement: "°C"
+    duration:
+      name: Durée
+      description: Facultatif. Sans durée, la dérogation dure jusqu'à la prochaine plage.
+      required: false
+      example: "02:00:00"
+      selector:
+        duration:
+
+clear_override:
+  name: Reprendre le planning
+  description: Annule la dérogation en cours et renvoie la consigne de la plage actuelle.

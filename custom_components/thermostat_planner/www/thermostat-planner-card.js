@@ -1,4 +1,4 @@
-/* Thermostat Planner card — v0.2.3
+/* Thermostat Planner card — v0.3.0
  * Carte Lovelace sans dépendance : planning par plages horaires,
  * modes Maison / Absent, 3 modes de programmation des jours.
  */
@@ -45,6 +45,14 @@
       target: "Consigne",
       next: "prochain changement",
       room: "pièce",
+      override: "Dérogation jusqu'à",
+      resume: "Reprendre le planning",
+      planned: "Planning",
+      heating: "Chauffe en cours",
+      idle: "Au repos",
+      lower: "Baisser la consigne",
+      raise: "Augmenter la consigne",
+      unavailable: "Thermostat indisponible",
       off: "Planification en pause",
       eEmpty: "Renseigne une heure valide.",
       eOrder: "L'heure de fin doit être après l'heure de début.",
@@ -88,6 +96,14 @@
       target: "Target",
       next: "next change",
       room: "room",
+      override: "Override until",
+      resume: "Resume schedule",
+      planned: "Schedule",
+      heating: "Heating",
+      idle: "Idle",
+      lower: "Lower target",
+      raise: "Raise target",
+      unavailable: "Thermostat unavailable",
       off: "Scheduling paused",
       eEmpty: "Enter a valid time.",
       eOrder: "End time must be after start time.",
@@ -171,6 +187,12 @@
       e = best.e;
     }
     return { s, e, t: best.t };
+  }
+
+  /** Consigne du thermostat après un appui ±, bornée et arrondie au pas. */
+  function stepSetpoint(value, delta, lim) {
+    const v = Math.max(lim.min, Math.min(lim.max, value + delta));
+    return Number((Math.round(v / lim.step) * lim.step).toFixed(2));
   }
 
   const keyFor = (layout, weekday) =>
@@ -270,9 +292,22 @@
       outline: 2px solid var(--primary-color); outline-offset: 2px;
     }
     .head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+    .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .title { font-size: 1.25rem; font-weight: 500; color: var(--primary-text-color); }
+    .hvac { flex: none; display: flex; color: var(--disabled-text-color, #8a8a8a); }
+    .hvac.on { color: var(--state-climate-heat-color, #ff8100); }
     .live { font-size: .875rem; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
     .live b { color: var(--primary-text-color); font-weight: 500; }
+
+    .ctrl { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 8px; }
+    .pill { height: 52px; border: 0; border-radius: 999px; background: var(--secondary-background-color);
+      display: flex; align-items: center; justify-content: center; }
+    button.pill { font-size: 1.625rem; line-height: 1; color: var(--primary-text-color); }
+    button.pill[disabled] { opacity: .45; cursor: default; }
+    .setpoint { font-size: 1.125rem; font-weight: 500; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+    .ctrl-info { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; column-gap: 8px;
+      min-height: 2.25rem; margin-bottom: 8px; font-size: .8125rem; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+    .ctrl-info .link { padding: 6px 4px; }
 
     .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px;
       background: var(--secondary-background-color); border-radius: 999px; margin-bottom: 12px; }
@@ -389,6 +424,8 @@
       this._timer = null;
       this._unsub = null;
       this._subscribing = false;
+      this._ovrValue = null; // consigne choisie avec ± pas encore envoyée
+      this._ovrTimer = null;
       this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
       this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
     }
@@ -529,8 +566,10 @@
       if (!s) return "";
       const t = this.t;
       if (!s.data.enabled) return esc(t.off);
-      const parts = [`<b>${esc(t[s.effective_mode])}</b>`, `${esc(t.target)} <b>${this._fmt(s.target)}°</b>`];
-      const climate = this._hass && this._hass.states[s.climate_entity];
+      const parts = [`<b>${esc(t[s.effective_mode])}</b>`];
+      // Avec les contrôles, la consigne prévue est déjà affichée sous les boutons ±.
+      if (!this._showControls()) parts.push(`${esc(t.target)} <b>${this._fmt(s.target)}°</b>`);
+      const climate = this._climate();
       const current = climate && climate.attributes.current_temperature;
       if (current !== undefined && current !== null) parts.push(`${this._fmt(Number(current))}° ${esc(t.room)}`);
       if (s.next_change) parts.push(`${esc(t.next)} ${esc(this._fmtTime(s.next_change))}`);
@@ -540,6 +579,123 @@
     _updateLive() {
       const el = this.shadowRoot.getElementById("live");
       if (el) el.innerHTML = this._liveHtml();
+      this._updateCtrl();
+    }
+
+    // -- réglage courant du thermostat ---------------------------------------
+    _showControls() {
+      return !this._config || this._config.show_controls !== false;
+    }
+
+    _climate() {
+      return this._state && this._hass ? this._hass.states[this._state.climate_entity] : undefined;
+    }
+
+    _climateUp(climate) {
+      return !!climate && climate.state !== "unavailable" && climate.state !== "unknown";
+    }
+
+    /** Bornes et pas du thermostat, dans la plage acceptée par l'intégration. */
+    _limits(climate) {
+      const a = (climate && climate.attributes) || {};
+      const num = (v, d) => (v === undefined || v === null || Number.isNaN(Number(v)) ? d : Number(v));
+      return {
+        min: Math.max(MIN_T, num(a.min_temp, MIN_T)),
+        max: Math.min(MAX_T, num(a.max_temp, MAX_T)),
+        step: num(a.target_temp_step, STEP) || STEP,
+      };
+    }
+
+    /** Consigne affichée : saisie en cours, sinon dérogation, sinon celle du thermostat. */
+    _setpoint() {
+      if (this._ovrValue !== null) return this._ovrValue;
+      const s = this._state;
+      if (s && s.override) return Number(s.override.temp);
+      const climate = this._climate();
+      const v = climate && climate.attributes.temperature;
+      return v === undefined || v === null ? null : Number(v);
+    }
+
+    _ctrlHtml() {
+      if (!this._state || !this._showControls()) return "";
+      const t = this.t;
+      return `<div class="ctrl">
+          <button class="pill" data-action="ovr-step" data-dir="-1" aria-label="${esc(t.lower)}">−</button>
+          <div class="pill setpoint" id="ctrl-val" aria-live="polite"></div>
+          <button class="pill" data-action="ovr-step" data-dir="1" aria-label="${esc(t.raise)}">+</button>
+        </div>
+        <div class="ctrl-info" id="ctrl-info"></div>`;
+    }
+
+    /** Met à jour les valeurs sans reconstruire les boutons (garde le focus). */
+    _updateCtrl() {
+      const root = this.shadowRoot;
+      const s = this._state;
+      const t = this.t;
+      const climate = this._climate();
+      const up = this._climateUp(climate);
+      const setHtml = (el, html) => {
+        if (!el || el._html === html) return;
+        el._html = html;
+        el.innerHTML = html;
+      };
+
+      const action = up && climate.attributes.hvac_action;
+      const hvac = root.getElementById("hvac");
+      if (hvac) {
+        hvac.className = "hvac" + (action === "heating" ? " on" : "");
+        hvac.title = action === "heating" ? t.heating : action ? t.idle : "";
+        setHtml(hvac, action ? `<ha-icon icon="${action === "heating" ? "mdi:fire" : "mdi:fire-off"}"></ha-icon>` : "");
+      }
+
+      const val = root.getElementById("ctrl-val");
+      if (!val || !s) return;
+      const sp = this._setpoint();
+      val.textContent = up && sp !== null ? `${this._fmt(sp)} °C` : "—";
+      root.querySelectorAll('[data-action="ovr-step"]').forEach((b) => (b.disabled = !up || sp === null));
+
+      let info = "";
+      if (!up) info = esc(t.unavailable);
+      else if (s.override)
+        info = `<span>${esc(t.override)} ${esc(this._fmtTime(s.override.until))}</span>
+          <button class="link" data-action="ovr-clear">${esc(t.resume)}</button>`;
+      else if (s.data.enabled && sp !== null && sp !== s.target)
+        info = `<span>${esc(t.planned)} ${this._fmt(s.target)}°</span>`;
+      setHtml(root.getElementById("ctrl-info"), info);
+    }
+
+    _stepOverride(dir) {
+      const climate = this._climate();
+      const base = this._setpoint();
+      if (!this._climateUp(climate) || base === null) return;
+      const lim = this._limits(climate);
+      this._ovrValue = stepSetpoint(base, dir * lim.step, lim);
+      this._updateCtrl();
+      // Un seul envoi après une série d'appuis.
+      clearTimeout(this._ovrTimer);
+      this._ovrTimer = setTimeout(() => this._sendOverride(), 1000);
+    }
+
+    async _sendOverride() {
+      const value = this._ovrValue;
+      const s = this._state;
+      const duration = Number(this._config && this._config.override_duration);
+      try {
+        if (s.override && value === s.target) {
+          // Retour à la consigne prévue : c'est une reprise du planning.
+          await this._hass.callWS({ type: "thermostat_planner/clear_override" });
+        } else {
+          const msg = { type: "thermostat_planner/set_override", temperature: value };
+          if (duration > 0) msg.duration = Math.round(duration);
+          await this._hass.callWS(msg);
+        }
+      } catch (err) {
+        this._status = "error";
+        this._error = (err && err.message) || "";
+        this._updateSaveStatus();
+      }
+      if (this._ovrValue === value) this._ovrValue = null;
+      this._updateCtrl();
     }
 
     _updateSaveStatus() {
@@ -684,9 +840,14 @@
       }
       this.shadowRoot.innerHTML = `<style>${STYLE}</style>
         <ha-card>
-          <div class="head"><div class="title">${esc(title)}</div><div class="live" id="live">${this._liveHtml()}</div></div>
+          <div class="head">
+            <div class="title-row"><div class="title">${esc(title)}</div><span class="hvac" id="hvac"></span></div>
+            <div class="live" id="live">${this._liveHtml()}</div>
+          </div>
+          ${this._ctrlHtml()}
           ${body}
         </ha-card>${this._modalHtml()}`;
+      this._updateCtrl();
       this._updateSaveStatus();
     }
 
@@ -727,7 +888,17 @@
       const profile = el.dataset.profile;
       const key = el.dataset.key;
 
-      if (a === "tab") {
+      if (a === "ovr-step") {
+        this._stepOverride(Number(el.dataset.dir));
+      } else if (a === "ovr-clear") {
+        clearTimeout(this._ovrTimer);
+        this._ovrValue = null;
+        this._hass.callWS({ type: "thermostat_planner/clear_override" }).catch((err) => {
+          this._status = "error";
+          this._error = (err && err.message) || "";
+          this._updateSaveStatus();
+        });
+      } else if (a === "tab") {
         this._profile = profile;
         this._render();
       } else if (a === "toggle") {
@@ -806,7 +977,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, keyFor, toMin, toStr, tempColors, parseScale };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, keyFor, toMin, toStr, tempColors, parseScale };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);

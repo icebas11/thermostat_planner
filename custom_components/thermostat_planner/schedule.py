@@ -154,6 +154,16 @@ def block_start(data: dict[str, Any], mode: str, now: datetime) -> datetime:
     return start
 
 
+def override_active(override: dict[str, Any] | None, mode: str, now: datetime) -> bool:
+    """Vrai si la dérogation s'applique encore : même mode et pas encore échue."""
+    if not override or override.get("mode") != mode:
+        return False
+    try:
+        return now < datetime.fromisoformat(override["until"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def next_change(data: dict[str, Any], mode: str, now: datetime) -> datetime | None:
     """Prochain début de plage (jusqu'à 7 jours), ou None."""
     profile = data["profiles"][mode]

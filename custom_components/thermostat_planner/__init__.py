@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,8 @@ from .const import (
     DEFAULT_AWAY_STATE,
     DEFAULT_CLIMATE,
     DOMAIN,
+    MAX_TEMP,
+    MIN_TEMP,
     MODES,
     SIGNAL_UPDATE,
     VERSION,
@@ -52,8 +55,11 @@ class Planner:
         # Dernière plage appliquée, conservée au redémarrage pour ne pas écraser
         # un réglage manuel fait pendant cette plage.
         self._applied_store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.applied")
+        # Dérogation temporaire : {"mode", "temp", "until"}, prioritaire sur le planning.
+        self._override_store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.override")
         self.data: dict[str, Any] = schedule.default_data()
         self._applied: dict[str, Any] | None = None
+        self.override: dict[str, Any] | None = None
         self._unsubs: list = []
 
     # -- options ---------------------------------------------------------
@@ -78,6 +84,7 @@ class Planner:
             except vol.Invalid as err:
                 _LOGGER.warning("Planning enregistré invalide, valeurs par défaut utilisées : %s", err)
         self._applied = await self._applied_store.async_load()
+        self.override = await self._override_store.async_load()
         self._unsubs.append(async_track_time_change(self.hass, self._tick, second=0))
         self._unsubs.append(
             async_track_state_change_event(self.hass, [self.climate_entity], self._climate_changed)
@@ -119,6 +126,7 @@ class Planner:
             "forced_by_entity": self.forced_by_entity,
             "target": schedule.target_for(self.data, mode, now),
             "next_change": following.isoformat() if following else None,
+            "override": self.override if schedule.override_active(self.override, mode, now) else None,
             "climate_entity": self.climate_entity,
             "away_entity": self.away_entity,
         }
@@ -136,6 +144,34 @@ class Planner:
         data = {**self.data, "manual_mode": mode}
         await self.async_save(data)
 
+    async def async_set_override(self, temperature: float, duration: timedelta | None = None) -> None:
+        """Déroge au planning jusqu'à la prochaine plage, ou pendant `duration`."""
+        now = dt_util.now()
+        mode = self.effective_mode
+        until = now + duration if duration else schedule.next_change(self.data, mode, now)
+        if until is None:
+            until = now + timedelta(days=1)
+        await self._async_store_override(
+            {"mode": mode, "temp": float(temperature), "until": until.isoformat()}
+        )
+        await self._async_apply()
+        self._notify()
+
+    async def async_clear_override(self) -> None:
+        """Reprend le planning : la consigne de la plage en cours est renvoyée."""
+        if self.override is None:
+            return
+        await self._async_store_override(None)
+        await self._async_apply()
+        self._notify()
+
+    async def _async_store_override(self, override: dict[str, Any] | None) -> None:
+        self.override = override
+        if override is None:
+            await self._override_store.async_remove()
+        else:
+            await self._override_store.async_save(override)
+
     @property
     def climate_available(self) -> bool:
         state = self.hass.states.get(self.climate_entity)
@@ -148,16 +184,24 @@ class Planner:
         un réglage manuel reste en place jusqu'à la plage suivante. Tant que le
         thermostat est indisponible, rien n'est envoyé ni mémorisé ;
         _climate_changed réessaie à son retour, le tick chaque minute sinon.
+
+        Une dérogation en cours prime sur le planning, même planification en
+        pause ; échue ou après un changement de mode, elle est effacée.
         """
-        if not self.data["enabled"]:
-            return
         now = dt_util.now()
         mode = self.effective_mode
-        applied = {
-            "mode": mode,
-            "start": schedule.block_start(self.data, mode, now).isoformat(),
-            "target": schedule.target_for(self.data, mode, now),
-        }
+        if self.override is not None and not schedule.override_active(self.override, mode, now):
+            await self._async_store_override(None)
+        if self.override is not None:
+            applied = {"mode": mode, "override": self.override["until"], "target": self.override["temp"]}
+        elif not self.data["enabled"]:
+            return
+        else:
+            applied = {
+                "mode": mode,
+                "start": schedule.block_start(self.data, mode, now).isoformat(),
+                "target": schedule.target_for(self.data, mode, now),
+            }
         if applied == self._applied or not self.climate_available:
             return
         _LOGGER.debug("Consigne %s -> %s", self.climate_entity, applied["target"])
@@ -179,9 +223,9 @@ class Planner:
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     async def _tick(self, _now) -> None:
-        before = self._applied
+        before = (self._applied, self.override)
         await self._async_apply()
-        if self._applied != before:
+        if (self._applied, self.override) != before:
             self._notify()
 
     async def _away_changed(self, _event: Event) -> None:
@@ -262,6 +306,38 @@ async def ws_set_mode(hass, connection, msg) -> None:
     connection.send_result(msg["id"])
 
 
+_TEMPERATURE = vol.All(vol.Coerce(float), vol.Range(min=MIN_TEMP, max=MAX_TEMP))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_override",
+        vol.Required("temperature"): _TEMPERATURE,
+        vol.Optional("duration"): vol.All(int, vol.Range(min=1)),  # minutes
+    }
+)
+@websocket_api.async_response
+async def ws_set_override(hass, connection, msg) -> None:
+    planner = _planner(hass)
+    if planner is None:
+        connection.send_error(msg["id"], "not_loaded", "Thermostat Planner n'est pas chargé")
+        return
+    duration = timedelta(minutes=msg["duration"]) if "duration" in msg else None
+    await planner.async_set_override(msg["temperature"], duration)
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/clear_override"})
+@websocket_api.async_response
+async def ws_clear_override(hass, connection, msg) -> None:
+    planner = _planner(hass)
+    if planner is None:
+        connection.send_error(msg["id"], "not_loaded", "Thermostat Planner n'est pas chargé")
+        return
+    await planner.async_clear_override()
+    connection.send_result(msg["id"])
+
+
 # -- Installation ------------------------------------------------------------
 def _resource_collection(hass: HomeAssistant):
     """Collection des ressources Lovelace en mode stockage, sinon None (mode YAML)."""
@@ -312,7 +388,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if not await _async_register_resource(hass, f"{CARD_URL}?v={VERSION}"):
         add_extra_js_url(hass, f"{CARD_URL}?v={VERSION}")
 
-    for command in (ws_get, ws_subscribe, ws_save, ws_set_mode):
+    for command in (ws_get, ws_subscribe, ws_save, ws_set_mode, ws_set_override, ws_clear_override):
         websocket_api.async_register_command(hass, command)
 
     async def _handle_set_mode(call: ServiceCall) -> None:
@@ -320,12 +396,34 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         if planner is not None:
             await planner.async_set_mode(call.data["mode"])
 
+    async def _handle_set_override(call: ServiceCall) -> None:
+        planner = _planner(hass)
+        if planner is not None:
+            await planner.async_set_override(call.data["temperature"], call.data.get("duration"))
+
+    async def _handle_clear_override(call: ServiceCall) -> None:
+        planner = _planner(hass)
+        if planner is not None:
+            await planner.async_clear_override()
+
     hass.services.async_register(
         DOMAIN,
         "set_mode",
         _handle_set_mode,
         schema=vol.Schema({vol.Required("mode"): vol.In(MODES)}),
     )
+    hass.services.async_register(
+        DOMAIN,
+        "set_override",
+        _handle_set_override,
+        schema=vol.Schema(
+            {
+                vol.Required("temperature"): _TEMPERATURE,
+                vol.Optional("duration"): vol.All(cv.time_period, cv.positive_timedelta),
+            }
+        ),
+    )
+    hass.services.async_register(DOMAIN, "clear_override", _handle_clear_override)
     return True
 
 

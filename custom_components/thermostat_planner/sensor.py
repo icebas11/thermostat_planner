@@ -48,11 +48,14 @@ class PlannerModeSensor(SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         state = self._planner.state_dict()
+        override = state["override"] or {}
         return {
             "manual_mode": self._planner.data["manual_mode"],
             "forced_by_entity": state["forced_by_entity"],
             "target_temperature": state["target"],
             "next_change": state["next_change"],
+            "override_temperature": override.get("temp"),
+            "override_until": override.get("until"),
             "enabled": self._planner.data["enabled"],
             "climate_entity": state["climate_entity"],
         }

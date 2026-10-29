@@ -47,6 +47,14 @@ assert sched.target_for(d, "home", datetime(2026, 10, 28, 13, 0)) == 22.5
 d["profiles"]["home"]["layout"] = "all"
 assert sched.target_for(d, "home", datetime(2026, 10, 28, 13, 0)) == 18 or True
 
+# dérogation
+ovr = {"mode": "home", "temp": 21, "until": mon(17, 30).isoformat()}
+assert sched.override_active(ovr, "home", mon(12, 0))
+assert not sched.override_active(ovr, "home", mon(17, 30)), "échue à l'heure de fin"
+assert not sched.override_active(ovr, "away", mon(12, 0)), "annulée si le mode change"
+assert not sched.override_active(None, "home", mon(12, 0))
+assert not sched.override_active({"mode": "home", "temp": 21, "until": "x"}, "home", mon(12, 0))
+
 bad = [
   lambda x: x["profiles"]["home"]["schedules"].__setitem__("all", [{"start": "01:00", "temp": 18}]),
   lambda x: x["profiles"]["home"]["schedules"].__setitem__("all", [{"start": "00:00", "temp": 18}, {"start": "00:00", "temp": 19}]),
