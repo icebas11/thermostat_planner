@@ -11,7 +11,7 @@ from homeassistant.components import websocket_api
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
@@ -49,8 +49,11 @@ class Planner:
         self.hass = hass
         self.entry = entry
         self._store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.data")
+        # Dernière plage appliquée, conservée au redémarrage pour ne pas écraser
+        # un réglage manuel fait pendant cette plage.
+        self._applied_store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.applied")
         self.data: dict[str, Any] = schedule.default_data()
-        self._last_target: float | None = None
+        self._applied: dict[str, Any] | None = None
         self._unsubs: list = []
 
     # -- options ---------------------------------------------------------
@@ -74,7 +77,11 @@ class Planner:
                 self.data = schedule.validate(stored)
             except vol.Invalid as err:
                 _LOGGER.warning("Planning enregistré invalide, valeurs par défaut utilisées : %s", err)
+        self._applied = await self._applied_store.async_load()
         self._unsubs.append(async_track_time_change(self.hass, self._tick, second=0))
+        self._unsubs.append(
+            async_track_state_change_event(self.hass, [self.climate_entity], self._climate_changed)
+        )
         if self.away_entity:
             self._unsubs.append(
                 async_track_state_change_event(self.hass, [self.away_entity], self._away_changed)
@@ -129,38 +136,66 @@ class Planner:
         data = {**self.data, "manual_mode": mode}
         await self.async_save(data)
 
+    @property
+    def climate_available(self) -> bool:
+        state = self.hass.states.get(self.climate_entity)
+        return state is not None and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+
     async def _async_apply(self) -> None:
-        """Envoie la consigne au thermostat si elle a changé."""
+        """Envoie la consigne une fois par plage.
+
+        Une plage déjà appliquée (même après un redémarrage) n'est pas renvoyée :
+        un réglage manuel reste en place jusqu'à la plage suivante. Tant que le
+        thermostat est indisponible, rien n'est envoyé ni mémorisé ;
+        _climate_changed réessaie à son retour, le tick chaque minute sinon.
+        """
         if not self.data["enabled"]:
             return
-        target = schedule.target_for(self.data, self.effective_mode, dt_util.now())
-        if target == self._last_target:
+        now = dt_util.now()
+        mode = self.effective_mode
+        applied = {
+            "mode": mode,
+            "start": schedule.block_start(self.data, mode, now).isoformat(),
+            "target": schedule.target_for(self.data, mode, now),
+        }
+        if applied == self._applied or not self.climate_available:
             return
-        self._last_target = target
-        _LOGGER.debug("Consigne %s -> %s", self.climate_entity, target)
+        _LOGGER.debug("Consigne %s -> %s", self.climate_entity, applied["target"])
         try:
             await self.hass.services.async_call(
                 "climate",
                 "set_temperature",
-                {"entity_id": self.climate_entity, "temperature": target},
-                blocking=False,
+                {"entity_id": self.climate_entity, "temperature": applied["target"]},
+                blocking=True,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Impossible de régler %s", self.climate_entity)
+            return
+        self._applied = applied
+        await self._applied_store.async_save(applied)
 
     @callback
     def _notify(self) -> None:
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     async def _tick(self, _now) -> None:
-        before = self._last_target
+        before = self._applied
         await self._async_apply()
-        if self._last_target != before:
+        if self._applied != before:
             self._notify()
 
     async def _away_changed(self, _event: Event) -> None:
         await self._async_apply()
         self._notify()
+
+    async def _climate_changed(self, event: Event) -> None:
+        """Au retour du thermostat, applique la plage si elle ne l'a pas encore été."""
+        old = event.data.get("old_state")
+        new = event.data.get("new_state")
+        was_down = old is None or old.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+        is_up = new is not None and new.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+        if was_down and is_up:
+            await self._async_apply()
 
 
 def _planner(hass: HomeAssistant) -> Planner | None:

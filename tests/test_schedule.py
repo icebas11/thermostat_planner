@@ -27,6 +27,16 @@ assert sched.target_for(d, "home", sat(7, 0)) == 18
 assert sched.target_for(d, "home", sat(8, 0)) == 21
 assert sched.target_for(d, "away", mon(12, 0)) == 16
 
+assert sched.block_start(d, "home", mon(9, 0)) == mon(8, 0)
+assert sched.block_start(d, "home", mon(6, 30)) == mon(6, 30)
+# 23:00 → 00:00 à 18 °C : une seule plage, qui a commencé la veille
+assert sched.block_start(d, "home", datetime(2026, 10, 27, 3, 0)) == mon(23, 0)
+assert sched.block_start(d, "home", mon(23, 30)) == mon(23, 0)
+# lundi 00:00-06:30 prolonge le dimanche 23:00
+assert sched.block_start(d, "home", mon(5, 0)) == datetime(2026, 10, 25, 23, 0)
+# une seule consigne toute la semaine : la plage remonte jusqu'à 7 jours
+assert sched.block_start(d, "away", mon(12, 0)) == datetime(2026, 10, 19, 0, 0)
+
 assert sched.next_change(d, "home", mon(6, 0)) == mon(6, 30)
 assert sched.next_change(d, "home", mon(23, 30)) == datetime(2026, 10, 27, 0, 0)
 

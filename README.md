@@ -61,6 +61,10 @@ et liste des plages sur plusieurs colonnes sur les cartes larges.
 - Une journée est une suite de plages qui couvre **0h → 24h** ; chaque plage dure jusqu'au début de la suivante.
 - Le mode effectif est **Absent** si l'interrupteur manuel est activé **ou** si l'entité choisie est dans l'état « absent ».
 - La consigne est envoyée au thermostat **uniquement quand elle change** (début de plage, changement de mode, modification du planning). Un réglage manuel sur le thermostat reste donc en place jusqu'à la prochaine plage.
+- La consigne est envoyée **une fois par plage**, et la plage appliquée est mémorisée (`.storage/thermostat_planner.applied`). Après un redémarrage de Home Assistant ou une coupure du thermostat :
+  - si on est toujours dans la même plage, rien n'est renvoyé : un réglage manuel est conservé ;
+  - si une nouvelle plage a commencé entre-temps, ou si l'envoi avait échoué, la consigne est envoyée **dès que le thermostat redevient disponible**.
+- Des plages consécutives à la même température comptent comme une seule (ex. 23:00 → 00:00 à 18 °C : pas de renvoi à minuit).
 - Le planning est enregistré dans `.storage/thermostat_planner.data`.
 
 ## Entités et services

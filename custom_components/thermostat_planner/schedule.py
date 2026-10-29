@@ -130,6 +130,30 @@ def target_for(data: dict[str, Any], mode: str, now: datetime) -> float:
     return float(target)
 
 
+def block_start(data: dict[str, Any], mode: str, now: datetime) -> datetime:
+    """Début de la plage en cours.
+
+    Les segments consécutifs de même consigne (y compris d'un jour sur l'autre,
+    ex. 23:00 → 00:00 à 18 °C) forment une seule plage. Remonte jusqu'à 7 jours.
+    """
+    profile = data["profiles"][mode]
+    target = target_for(data, mode, now)
+    minutes = now.hour * 60 + now.minute
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = midnight
+    for offset in range(8):
+        day = midnight - timedelta(days=offset)
+        segments = profile["schedules"][schedule_key(profile["layout"], day.weekday())]
+        for item in reversed(segments):
+            begin = to_minutes(item["start"])
+            if offset == 0 and begin > minutes:
+                continue
+            if float(item["temp"]) != target:
+                return start
+            start = day + timedelta(minutes=begin)
+    return start
+
+
 def next_change(data: dict[str, Any], mode: str, now: datetime) -> datetime | None:
     """Prochain début de plage (jusqu'à 7 jours), ou None."""
     profile = data["profiles"][mode]
