@@ -28,7 +28,9 @@ Copie `custom_components/thermostat_planner/` dans `<config>/custom_components/`
    - une alarme → `armed_away`
 
    Ces réglages restent modifiables via *Configurer*.
-4. Ajoute la carte à un dashboard (la ressource est chargée automatiquement) :
+4. Ajoute la carte à un dashboard. La ressource `/thermostat_planner/thermostat-planner-card.js` est ajoutée
+   automatiquement dans *Paramètres › Tableaux de bord › Ressources* (en mode YAML de Lovelace, elle est chargée
+   globalement à la place) :
 
 ```yaml
 type: custom:thermostat-planner-card

@@ -228,6 +228,44 @@ async def ws_set_mode(hass, connection, msg) -> None:
 
 
 # -- Installation ------------------------------------------------------------
+def _resource_collection(hass: HomeAssistant):
+    """Collection des ressources Lovelace en mode stockage, sinon None (mode YAML)."""
+    lovelace = hass.data.get("lovelace")
+    if lovelace is None:
+        return None
+    resources = getattr(lovelace, "resources", None)
+    if resources is None and isinstance(lovelace, dict):
+        resources = lovelace.get("resources")
+    if resources is None or not hasattr(resources, "async_create_item"):
+        return None
+    return resources
+
+
+async def _async_register_resource(hass: HomeAssistant, url: str) -> bool:
+    """Déclare la carte comme ressource Lovelace (chargée par le dashboard lui-même).
+
+    Plus fiable que add_extra_js_url, dont l'URL est figée dans l'index.html
+    mis en cache par l'app mobile. Renvoie False si impossible (mode YAML).
+    """
+    resources = _resource_collection(hass)
+    if resources is None:
+        return False
+    try:
+        if not resources.loaded:
+            await resources.async_load()
+            resources.loaded = True
+        for item in resources.async_items():
+            if item["url"].split("?")[0] == CARD_URL:
+                if item["url"] != url:
+                    await resources.async_update_item(item["id"], {"res_type": "module", "url": url})
+                return True
+        await resources.async_create_item({"res_type": "module", "url": url})
+        return True
+    except Exception:  # noqa: BLE001 - repli sur add_extra_js_url
+        _LOGGER.warning("Impossible d'enregistrer la ressource Lovelace %s", url, exc_info=True)
+        return False
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Enregistre la carte, l'API WebSocket et le service (une seule fois)."""
     hass.data.setdefault(DOMAIN, {})
@@ -236,7 +274,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     await hass.http.async_register_static_paths(
         [StaticPathConfig(CARD_URL, str(card_file), False)]
     )
-    add_extra_js_url(hass, f"{CARD_URL}?v={VERSION}")
+    if not await _async_register_resource(hass, f"{CARD_URL}?v={VERSION}"):
+        add_extra_js_url(hass, f"{CARD_URL}?v={VERSION}")
 
     for command in (ws_get, ws_subscribe, ws_save, ws_set_mode):
         websocket_api.async_register_command(hass, command)
@@ -266,6 +305,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Retire la ressource Lovelace quand l'intégration est supprimée."""
+    resources = _resource_collection(hass)
+    if resources is None or not resources.loaded:
+        return
+    for item in list(resources.async_items()):
+        if item["url"].split("?")[0] == CARD_URL:
+            await resources.async_delete_item(item["id"])
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
