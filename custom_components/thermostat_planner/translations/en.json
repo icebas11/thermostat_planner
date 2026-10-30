@@ -13,7 +13,9 @@
         }
       }
     },
-    "abort": { "already_configured": "Thermostat Planner is already configured." }
+    "abort": {
+      "already_configured": "Thermostat Planner is already configured."
+    }
   },
   "options": {
     "step": {
@@ -22,7 +24,13 @@
         "data": {
           "climate_entity": "Thermostat",
           "away_entity": "Entity that forces Away mode (optional)",
-          "away_state": "State meaning Away"
+          "away_state": "State meaning Away",
+          "restrict_edit": "Restrict schedule editing",
+          "editors": "Users allowed to edit the schedule"
+        },
+        "data_description": {
+          "restrict_edit": "Off: every user can edit the schedule. On: only administrators and the users checked below (others see it read-only but can still change the setpoint and Away mode).",
+          "editors": "Administrators are always allowed."
         }
       }
     }

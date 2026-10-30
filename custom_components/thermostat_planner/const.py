@@ -1,11 +1,13 @@
 """Constantes de Thermostat Planner."""
 
 DOMAIN = "thermostat_planner"
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 CONF_CLIMATE = "climate_entity"
 CONF_AWAY_ENTITY = "away_entity"
 CONF_AWAY_STATE = "away_state"
+CONF_RESTRICT_EDIT = "restrict_edit"
+CONF_EDITORS = "editors"
 
 DEFAULT_CLIMATE = "climate.thermostat"
 DEFAULT_AWAY_STATE = "not_home"

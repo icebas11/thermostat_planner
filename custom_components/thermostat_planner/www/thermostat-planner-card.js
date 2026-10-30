@@ -1,4 +1,4 @@
-/* Thermostat Planner card — v0.3.0
+/* Thermostat Planner card — v0.3.1
  * Carte Lovelace sans dépendance : planning par plages horaires,
  * modes Maison / Absent, 3 modes de programmation des jours.
  */
@@ -7,6 +7,8 @@
   const MIN_T = 5;
   const MAX_T = 35;
   const STEP = 0.5;
+  // Actions qui modifient le planning (soumises au droit de modification).
+  const EDIT_ACTIONS = new Set(["layout", "enabled-switch", "paste", "edit", "add", "modal-remove", "modal-save"]);
 
   const I18N = {
     fr: {
@@ -54,6 +56,7 @@
       raise: "Augmenter la consigne",
       unavailable: "Thermostat indisponible",
       off: "Planification en pause",
+      readOnly: "Lecture seule : la modification du planning est réservée à certains utilisateurs.",
       eEmpty: "Renseigne une heure valide.",
       eOrder: "L'heure de fin doit être après l'heure de début.",
       eEraseBefore: "Le début doit rester après le début de la plage précédente.",
@@ -105,6 +108,7 @@
       raise: "Raise target",
       unavailable: "Thermostat unavailable",
       off: "Scheduling paused",
+      readOnly: "Read-only: schedule editing is restricted to some users.",
       eEmpty: "Enter a valid time.",
       eOrder: "End time must be after start time.",
       eEraseBefore: "Start must stay after the previous block's start.",
@@ -377,6 +381,10 @@
     .btn[disabled] { opacity: .45; cursor: default; }
     .link { border: 0; background: transparent; color: var(--primary-color); font-weight: 500; padding: 8px 4px; }
     .tool-group { display: flex; gap: 8px; }
+    div.block { cursor: default; }
+    div.block::after { display: none; }
+    .switch input[disabled] { cursor: default; }
+    .switch input[disabled] + span, select[disabled] { opacity: .5; }
 
     .foot { margin-top: 12px; }
     .status { text-align: right; font-size: .8125rem; color: var(--secondary-text-color); min-height: 1.2em; margin-top: 8px; }
@@ -741,13 +749,26 @@
         .join("");
       const ticks = [];
       for (let h = 0; h <= 24; h += tickStep) ticks.push(`<span style="left:${(h / 24) * 100}%">${h}:00</span>`);
+      const editable = this._canEdit();
       const blocks = ivs
         .map((iv, i) => {
           const c = tempColors(iv.t, this._scale);
-          return `<button class="block" data-action="edit" data-profile="${profileName}" data-key="${sec.key}" data-index="${i}" style="--accent:${c.accent};--tint:${c.tint}">
-            <span><span class="range">${toStr(iv.s)} – ${toStr(iv.e)}</span><span class="deg">${this._fmt(iv.t)}°</span></span></button>`;
+          const inner = `<span><span class="range">${toStr(iv.s)} – ${toStr(iv.e)}</span><span class="deg">${this._fmt(iv.t)}°</span></span>`;
+          const style = `--accent:${c.accent};--tint:${c.tint}`;
+          return editable
+            ? `<button class="block" data-action="edit" data-profile="${profileName}" data-key="${sec.key}" data-index="${i}" style="${style}">${inner}</button>`
+            : `<div class="block" style="${style}">${inner}</div>`;
         })
         .join("");
+      const tools = editable
+        ? `<div class="tools">
+          <div class="tool-group">
+            <button class="btn" data-action="copy" data-profile="${profileName}" data-key="${sec.key}">${esc(t.copy)}</button>
+            <button class="btn" data-action="paste" data-profile="${profileName}" data-key="${sec.key}" ${this._clipboard ? "" : "disabled"}>${esc(t.paste)}</button>
+          </div>
+          <button class="link" data-action="add" data-profile="${profileName}" data-key="${sec.key}">${esc(t.addBlock)}</button>
+        </div>`
+        : "";
 
       return `<div class="section ${open ? "open" : ""}">
         <button class="sec-head" data-action="toggle" data-id="${id}" aria-expanded="${open}">
@@ -759,13 +780,7 @@
           <div class="axis">${ticks.join("")}</div>
         </div>
         <div class="blocks">${blocks}</div>
-        <div class="tools">
-          <div class="tool-group">
-            <button class="btn" data-action="copy" data-profile="${profileName}" data-key="${sec.key}">${esc(t.copy)}</button>
-            <button class="btn" data-action="paste" data-profile="${profileName}" data-key="${sec.key}" ${this._clipboard ? "" : "disabled"}>${esc(t.paste)}</button>
-          </div>
-          <button class="link" data-action="add" data-profile="${profileName}" data-key="${sec.key}">${esc(t.addBlock)}</button>
-        </div>
+        ${tools}
       </div>`;
     }
 
@@ -820,6 +835,7 @@
       } else {
         const s = this._state;
         const profile = s.data.profiles[this._profile];
+        const ro = this._canEdit() ? "" : "disabled";
         const tab = (name) =>
           `<button class="tab ${this._profile === name ? "on" : ""}" data-action="tab" data-profile="${name}">${esc(t[name])}${s.effective_mode === name ? `<span class="dot" title="${esc(t.activeBadge)}"></span>` : ""}</button>`;
         const forced = s.forced_by_entity
@@ -830,13 +846,14 @@
           <div class="row"><div><div class="label">${esc(t.manualAway)}</div>${forced}</div>
             <label class="switch"><input type="checkbox" data-action="away-switch" ${s.data.manual_mode === "away" ? "checked" : ""}><span></span></label></div>
           <div class="row"><div class="label">${esc(t.layout)}</div>
-            <select data-action="layout">
+            <select data-action="layout" ${ro}>
               ${["all", "weekday_weekend", "daily"].map((l) => `<option value="${l}" ${profile.layout === l ? "selected" : ""}>${esc(t["layout_" + l])}</option>`).join("")}
             </select></div>
           ${this._sections(profile.layout).map((sec) => this._sectionHtml(this._profile, sec)).join("")}
           <div class="row" style="margin-top:12px"><div class="label">${esc(t.enabled)}</div>
-            <label class="switch"><input type="checkbox" data-action="enabled-switch" ${s.data.enabled ? "checked" : ""}><span></span></label></div>
-          <div id="save-status" class="status"></div>`;
+            <label class="switch"><input type="checkbox" data-action="enabled-switch" ${s.data.enabled ? "checked" : ""} ${ro}><span></span></label></div>
+          <div id="save-status" class="status"></div>
+          ${ro ? `<div class="status">${esc(t.readOnly)}</div>` : ""}`;
       }
       this.shadowRoot.innerHTML = `<style>${STYLE}</style>
         <ha-card>
@@ -852,6 +869,11 @@
     }
 
     // -- interactions ------------------------------------------------------
+    /** Droit de modifier le planning (envoyé par le serveur ; absent = ancien serveur). */
+    _canEdit() {
+      return !this._state || this._state.can_edit !== false;
+    }
+
     _profileData(name) {
       return this._state.data.profiles[name];
     }
@@ -865,6 +887,7 @@
       const el = e.target.closest("[data-action]");
       if (!el || !this._state) return;
       const action = el.dataset.action;
+      if (EDIT_ACTIONS.has(action) && !this._canEdit()) return this._render();
       if (action === "layout") {
         seedLayout(this._profileData(this._profile), el.value);
         this._commit();
@@ -885,6 +908,7 @@
       const el = e.target.closest("[data-action]");
       if (!el || !this._state) return;
       const a = el.dataset.action;
+      if (EDIT_ACTIONS.has(a) && !this._canEdit()) return;
       const profile = el.dataset.profile;
       const key = el.dataset.key;
 

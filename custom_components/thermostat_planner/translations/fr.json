@@ -13,7 +13,9 @@
         }
       }
     },
-    "abort": { "already_configured": "Thermostat Planner est déjà configuré." }
+    "abort": {
+      "already_configured": "Thermostat Planner est déjà configuré."
+    }
   },
   "options": {
     "step": {
@@ -22,7 +24,13 @@
         "data": {
           "climate_entity": "Thermostat",
           "away_entity": "Entité qui force le mode Absent (facultatif)",
-          "away_state": "État signifiant Absent"
+          "away_state": "État signifiant Absent",
+          "restrict_edit": "Restreindre la modification du planning",
+          "editors": "Utilisateurs autorisés à modifier le planning"
+        },
+        "data_description": {
+          "restrict_edit": "Désactivé : tous les utilisateurs peuvent modifier le planning. Activé : seulement les administrateurs et les utilisateurs cochés ci-dessous (les autres le voient en lecture seule, mais peuvent toujours régler la consigne et le mode Absent).",
+          "editors": "Les administrateurs ont toujours le droit."
         }
       }
     }

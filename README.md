@@ -29,6 +29,10 @@ Copie `custom_components/thermostat_planner/` dans `<config>/custom_components/`
    - une alarme → `armed_away`
 
    Ces réglages restent modifiables via *Configurer*.
+
+   *Configurer* propose aussi les **droits de modification** : par défaut, **tous les utilisateurs** peuvent modifier
+   le planning. En cochant *Restreindre la modification du planning*, seuls les administrateurs et les utilisateurs
+   cochés le peuvent ; les autres voient la carte en lecture seule, mais peuvent toujours utiliser − / + et le mode Absent.
 4. Ajoute la carte à un dashboard. La ressource `/thermostat_planner/thermostat-planner-card.js` est ajoutée
    automatiquement dans *Paramètres › Tableaux de bord › Ressources* (en mode YAML de Lovelace, elle est chargée
    globalement à la place) :

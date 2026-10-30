@@ -27,6 +27,8 @@ from .const import (
     CONF_AWAY_ENTITY,
     CONF_AWAY_STATE,
     CONF_CLIMATE,
+    CONF_EDITORS,
+    CONF_RESTRICT_EDIT,
     DEFAULT_AWAY_STATE,
     DEFAULT_CLIMATE,
     DOMAIN,
@@ -74,6 +76,13 @@ class Planner:
     @property
     def away_state(self) -> str:
         return (self.entry.options.get(CONF_AWAY_STATE) or DEFAULT_AWAY_STATE).strip().lower()
+
+    def can_edit(self, user) -> bool:
+        """Droit de modifier le planning : tout le monde, sauf restriction
+        (administrateurs + utilisateurs choisis dans les options)."""
+        if not self.entry.options.get(CONF_RESTRICT_EDIT):
+            return True
+        return user is not None and (user.is_admin or user.id in self.entry.options.get(CONF_EDITORS, []))
 
     # -- cycle de vie ----------------------------------------------------
     async def async_start(self) -> None:
@@ -247,6 +256,11 @@ def _planner(hass: HomeAssistant) -> Planner | None:
     return next(iter(planners.values()), None)
 
 
+def _state_for(planner: Planner, user) -> dict[str, Any]:
+    """État envoyé à la carte, avec les droits de l'utilisateur connecté."""
+    return {**planner.state_dict(), "can_edit": planner.can_edit(user)}
+
+
 # -- WebSocket API ---------------------------------------------------------
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get"})
 @callback
@@ -255,27 +269,31 @@ def ws_get(hass, connection, msg) -> None:
     if planner is None:
         connection.send_error(msg["id"], "not_loaded", "Thermostat Planner n'est pas chargé")
         return
-    connection.send_result(msg["id"], planner.state_dict())
+    connection.send_result(msg["id"], _state_for(planner, connection.user))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/subscribe"})
 @callback
 def ws_subscribe(hass, connection, msg) -> None:
-    planner = _planner(hass)
-    if planner is None:
+    if _planner(hass) is None:
         connection.send_error(msg["id"], "not_loaded", "Thermostat Planner n'est pas chargé")
         return
 
     @callback
     def forward() -> None:
-        connection.send_message(websocket_api.event_message(msg["id"], planner.state_dict()))
+        # Relu à chaque fois : après un changement d'options, l'entrée est
+        # rechargée et le moteur remplacé.
+        planner = _planner(hass)
+        if planner is not None:
+            connection.send_message(
+                websocket_api.event_message(msg["id"], _state_for(planner, connection.user))
+            )
 
     connection.subscriptions[msg["id"]] = async_dispatcher_connect(hass, SIGNAL_UPDATE, forward)
     connection.send_result(msg["id"])
     forward()
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command(
     {vol.Required("type"): f"{DOMAIN}/save", vol.Required("data"): dict}
 )
@@ -284,6 +302,11 @@ async def ws_save(hass, connection, msg) -> None:
     planner = _planner(hass)
     if planner is None:
         connection.send_error(msg["id"], "not_loaded", "Thermostat Planner n'est pas chargé")
+        return
+    if not planner.can_edit(connection.user):
+        connection.send_error(
+            msg["id"], websocket_api.ERR_UNAUTHORIZED, "Modification du planning non autorisée"
+        )
         return
     try:
         await planner.async_save(msg["data"])
