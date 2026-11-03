@@ -10,10 +10,11 @@ Home Assistant custom integration + Lovelace card (distributed via HACS) for a h
 
 ```bash
 python3 tests/test_schedule.py   # pure scheduling logic; prints "python OK" on success
+node tests/test_card.js          # pure card helpers (paint, applyEdit, stepSetpoint…); prints "js OK" on success
 ```
 
-- There is no test runner, linter or build step. The test is a plain script of `assert`s: it loads `const.py` and `schedule.py` by file path (no Home Assistant install needed), so `schedule.py` must stay free of `homeassistant` imports.
-- The card is a single dependency-free JS file (no bundler). Quick syntax check: `node -e 'global.window={};global.HTMLElement=class{};global.customElements={get:()=>true};require("./custom_components/thermostat_planner/www/thermostat-planner-card.js")'`. Pure helpers are exposed as `ThermostatPlannerCard.helpers` for ad-hoc testing.
+- There is no test runner, linter or build step. Tests are plain scripts of `assert`s. The Python one loads `const.py` and `schedule.py` by file path (no Home Assistant install needed), so `schedule.py` must stay free of `homeassistant` imports.
+- The card is a single dependency-free JS file (no bundler). Quick syntax check: `node -e 'global.window={};global.HTMLElement=class{};global.customElements={get:()=>true};require("./custom_components/thermostat_planner/www/thermostat-planner-card.js")'`. Pure helpers are exposed as `ThermostatPlannerCard.helpers`; under node the file also sets `module.exports = ThermostatPlannerCard`, which is how `tests/test_card.js` reaches them (with the same stubs). Add new pure logic there and test it.
 - Anything touching `__init__.py`, `sensor.py` or the card can only be verified in a running Home Assistant.
 
 ## Architecture
@@ -39,7 +40,7 @@ Effective mode = `away` if the configured away entity is in the configured state
 
 ## Roadmap (proposed, not implemented yet)
 
-Ideas agreed with the user to implement later, in suggested order. Already done: on-card setpoint control (− / +) and temporary override (v0.3.0).
+Ideas agreed with the user to implement later, in suggested order. Already done: on-card setpoint control (− / +) and temporary override (v0.3.0); JS tests for the card helpers and thermostat limits in the block temperature picker.
 
 1. **Native entities** — add `select` (home/away mode), `switch` (scheduling enabled), `sensor`s for planned target and next change (`device_class: timestamp`), so everything is usable in automations, voice assistants and history without custom services. Avoid a full proxy `climate` entity (duplicates the real thermostat).
 2. **Public holidays** — optional `binary_sensor` from the core **Workday** integration: a non-working day uses the weekend schedule (or Sunday in `daily` layout). Configured in the config/options flow.
@@ -53,8 +54,6 @@ Ideas agreed with the user to implement later, in suggested order. Already done:
    - copy one day to several days at once (checkboxes Mon–Sun);
    - visual card editor (`getConfigElement`) for `title`, `expand_today`, `show_controls`, `override_duration`, `colors`;
    - overlay the actual room temperature curve (history) on today's bar;
-   - respect the thermostat's `min_temp` / `max_temp` / `target_temp_step` in the block temperature picker too (only the − / + controls do so today);
-   - JS tests for the pure card helpers (`paint`, `applyEdit`, `removeBlock`, `seedLayout`, `stepSetpoint`).
 
 ## Releasing
 

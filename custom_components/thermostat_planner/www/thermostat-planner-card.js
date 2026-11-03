@@ -131,10 +131,15 @@
       e: i < segs.length - 1 ? toMin(segs[i + 1].start) : 1440,
       t: g.temp,
     }));
+  /** Intervalles → segments triés, en fusionnant les voisins de même température. */
   const fromIntervals = (ivs) =>
-    ivs.slice().sort((a, b) => a.s - b.s).map((iv) => ({ start: toStr(iv.s), temp: iv.t }));
+    ivs
+      .slice()
+      .sort((a, b) => a.s - b.s)
+      .filter((iv, i, a) => i === 0 || iv.t !== a[i - 1].t)
+      .map((iv) => ({ start: toStr(iv.s), temp: iv.t }));
 
-  /** Peint [s, e[ avec la température t, en découpant les plages existantes. */
+  /** Peint [s, e[ avec la température t, en découpant les plages existantes (voisines identiques fusionnées). */
   function paint(segs, s, e, t) {
     const out = [];
     intervals(segs).forEach((iv) => {
@@ -193,10 +198,23 @@
     return { s, e, t: best.t };
   }
 
-  /** Consigne du thermostat après un appui ±, bornée et arrondie au pas. */
+  /** Consigne après un appui ± (delta = 0 : simple mise aux bornes), bornée et arrondie au pas. */
   function stepSetpoint(value, delta, lim) {
-    const v = Math.max(lim.min, Math.min(lim.max, value + delta));
-    return Number((Math.round(v / lim.step) * lim.step).toFixed(2));
+    const { min, max, step } = lim;
+    let v = Math.round(Math.max(min, Math.min(max, value + delta)) / step) * step;
+    // L'arrondi au pas ne doit pas faire sortir des bornes (ex. max 30,3 et pas de 0,5).
+    if (v > max) v = Math.floor(max / step + 1e-9) * step;
+    if (v < min) v = Math.ceil(min / step - 1e-9) * step;
+    if (v > max) v = min; // bornes plus resserrées que le pas
+    return Number(v.toFixed(2));
+  }
+
+  /** Bornes d'une consigne de planning : le serveur arrondit au 0,5 °C, le pas est donc un multiple de 0,5. */
+  function scheduleLimits(lim) {
+    const step = Math.max(1, Math.ceil(lim.step / STEP - 1e-9)) * STEP;
+    const min = Math.ceil(lim.min / step - 1e-9) * step;
+    const max = Math.floor(lim.max / step + 1e-9) * step;
+    return max >= min ? { min, max, step } : { min: lim.min, max: lim.max, step };
   }
 
   const keyFor = (layout, weekday) =>
@@ -610,8 +628,13 @@
       return {
         min: Math.max(MIN_T, num(a.min_temp, MIN_T)),
         max: Math.min(MAX_T, num(a.max_temp, MAX_T)),
-        step: num(a.target_temp_step, STEP) || STEP,
+        step: num(a.target_temp_step, STEP) > 0 ? num(a.target_temp_step, STEP) : STEP,
       };
+    }
+
+    /** Bornes du sélecteur de température des plages (thermostat, ou 5–35 °C à défaut). */
+    _scheduleLimits() {
+      return scheduleLimits(this._limits(this._climate()));
     }
 
     /** Consigne affichée : saisie en cours, sinon dérogation, sinon celle du thermostat. */
@@ -792,6 +815,7 @@
       const n = segs.length;
       const first = m.kind === "edit" && m.index === 0;
       const last = m.kind === "edit" && m.index === n - 1;
+      const lim = this._scheduleLimits();
       const timeField = (id, label, value, disabled) =>
         disabled
           ? `<div class="field"><label>${esc(label)}</label><input type="text" id="${id}" value="${esc(value)}" disabled></div>`
@@ -803,9 +827,9 @@
           ${timeField("m-end", t.end, toStr(m.e), last)}
           <div class="field"><label for="m-temp">${esc(t.temp)}</label>
             <div class="stepper">
-              <button data-action="step" data-delta="-${STEP}" aria-label="-${STEP}">−</button>
-              <input id="m-temp" type="number" inputmode="decimal" min="${MIN_T}" max="${MAX_T}" step="${STEP}" value="${m.t}">
-              <button data-action="step" data-delta="${STEP}" aria-label="+${STEP}">+</button>
+              <button data-action="step" data-dir="-1" aria-label="-${lim.step}">−</button>
+              <input id="m-temp" type="number" inputmode="decimal" min="${lim.min}" max="${lim.max}" step="${lim.step}" value="${stepSetpoint(m.t, 0, lim)}">
+              <button data-action="step" data-dir="1" aria-label="+${lim.step}">+</button>
             </div>
           </div>
           <div class="err" id="m-err" role="alert"></div>
@@ -948,8 +972,10 @@
         this._render();
       } else if (a === "step") {
         const input = this.shadowRoot.getElementById("m-temp");
-        const v = Math.max(MIN_T, Math.min(MAX_T, (parseFloat(input.value) || 0) + Number(el.dataset.delta)));
-        input.value = String(Math.round(v * 2) / 2);
+        const lim = this._scheduleLimits();
+        const cur = parseFloat(input.value);
+        const base = Number.isNaN(cur) ? lim.min : cur;
+        input.value = String(stepSetpoint(base, Number(el.dataset.dir) * lim.step, lim));
       } else if (a === "modal-cancel") {
         this._closeModal();
       } else if (a === "overlay") {
@@ -978,7 +1004,7 @@
       const endVal = root.getElementById("m-end").value;
       const tempRaw = parseFloat(root.getElementById("m-temp").value);
       if (Number.isNaN(tempRaw)) return this._modalError("eEmpty");
-      const temp = Math.round(Math.max(MIN_T, Math.min(MAX_T, tempRaw)) * 2) / 2;
+      const temp = stepSetpoint(tempRaw, 0, this._scheduleLimits());
       const profile = this._profileData(m.profile);
       const segs = profile.schedules[m.key];
       const start = startVal ? toMin(startVal) : NaN;
@@ -1001,11 +1027,13 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, keyFor, toMin, toStr, tempColors, parseScale };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);
   }
+  // Accès aux helpers depuis node (tests/test_card.js) ; sans effet dans le navigateur.
+  if (typeof module !== "undefined" && module.exports) module.exports = ThermostatPlannerCard;
   window.customCards = window.customCards || [];
   window.customCards.push({
     type: "thermostat-planner-card",
