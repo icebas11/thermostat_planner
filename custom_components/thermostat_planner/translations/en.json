@@ -34,5 +34,69 @@
         }
       }
     }
+  },
+  "entity": {
+    "select": {
+      "manual_mode": {
+        "name": "Manual mode",
+        "state": {
+          "home": "Home",
+          "away": "Away"
+        },
+        "state_attributes": {
+          "effective_mode": {
+            "name": "Effective mode",
+            "state": {
+              "home": "Home",
+              "away": "Away"
+            }
+          },
+          "forced_by_entity": {
+            "name": "Forced by entity"
+          }
+        }
+      }
+    },
+    "switch": {
+      "scheduling": {
+        "name": "Scheduling"
+      }
+    },
+    "sensor": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "home": "Home",
+          "away": "Away"
+        }
+      },
+      "target": {
+        "name": "Planned setpoint",
+        "state_attributes": {
+          "source": {
+            "name": "Source",
+            "state": {
+              "schedule": "Schedule",
+              "override": "Override"
+            }
+          }
+        }
+      },
+      "next_change": {
+        "name": "Next change",
+        "state_attributes": {
+          "next_temperature": {
+            "name": "Next temperature"
+          },
+          "source": {
+            "name": "Source",
+            "state": {
+              "schedule": "Schedule",
+              "override": "End of override"
+            }
+          }
+        }
+      }
+    }
   }
 }

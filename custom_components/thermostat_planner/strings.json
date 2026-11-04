@@ -1,0 +1,102 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Thermostat Planner",
+        "data": {
+          "climate_entity": "Thermostat",
+          "away_entity": "Entity that forces Away mode (optional)",
+          "away_state": "State meaning Away"
+        },
+        "data_description": {
+          "away_state": "For a person entity use not_home; for a switch or alarm use on, armed_away, etc."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Thermostat Planner is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Thermostat Planner",
+        "data": {
+          "climate_entity": "Thermostat",
+          "away_entity": "Entity that forces Away mode (optional)",
+          "away_state": "State meaning Away",
+          "restrict_edit": "Restrict schedule editing",
+          "editors": "Users allowed to edit the schedule"
+        },
+        "data_description": {
+          "restrict_edit": "Off: every user can edit the schedule. On: only administrators and the users checked below (others see it read-only but can still change the setpoint and Away mode).",
+          "editors": "Administrators are always allowed."
+        }
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "manual_mode": {
+        "name": "Manual mode",
+        "state": {
+          "home": "Home",
+          "away": "Away"
+        },
+        "state_attributes": {
+          "effective_mode": {
+            "name": "Effective mode",
+            "state": {
+              "home": "Home",
+              "away": "Away"
+            }
+          },
+          "forced_by_entity": {
+            "name": "Forced by entity"
+          }
+        }
+      }
+    },
+    "switch": {
+      "scheduling": {
+        "name": "Scheduling"
+      }
+    },
+    "sensor": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "home": "Home",
+          "away": "Away"
+        }
+      },
+      "target": {
+        "name": "Planned setpoint",
+        "state_attributes": {
+          "source": {
+            "name": "Source",
+            "state": {
+              "schedule": "Schedule",
+              "override": "Override"
+            }
+          }
+        }
+      },
+      "next_change": {
+        "name": "Next change",
+        "state_attributes": {
+          "next_temperature": {
+            "name": "Next temperature"
+          },
+          "source": {
+            "name": "Source",
+            "state": {
+              "schedule": "Schedule",
+              "override": "End of override"
+            }
+          }
+        }
+      }
+    }
+  }
+}

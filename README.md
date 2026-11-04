@@ -90,7 +90,25 @@ et liste des plages sur plusieurs colonnes sur les cartes larges.
 - Le planning est enregistré dans `.storage/thermostat_planner.data`.
 
 ## Entités et services
-- `sensor.thermostat_planner_mode` : `home` ou `away`. Attributs : `manual_mode`, `forced_by_entity`, `target_temperature` (consigne prévue par le planning), `next_change`, `override_temperature`, `override_until`, `enabled`.
+Toutes les entités sont rattachées à l'appareil **Thermostat Planner** et utilisables dans les automatisations, les assistants vocaux et l'historique. Les `entity_id` indiqués sont ceux créés par défaut (Home Assistant les dérive des noms anglais) ; tu peux les renommer.
+
+| Entité | Rôle |
+|---|---|
+| `select.thermostat_planner_manual_mode` | Mode manuel *Maison* / *Absent* (`home` / `away`), comme le bouton de la carte ou le service `set_mode`. Attributs : `effective_mode` (mode réellement appliqué, `away` si l'entité d'absence le force), `forced_by_entity`. |
+| `switch.thermostat_planner_scheduling` | Programmation activée ou en pause. Avec l'option *Restreindre la modification du planning*, seuls les administrateurs et les utilisateurs autorisés peuvent la changer depuis l'interface ; les automatisations le peuvent toujours. |
+| `sensor.thermostat_planner_planned_setpoint` | Consigne prévue maintenant (°C) : celle de la dérogation en cours, sinon celle du planning (même programmation en pause). Attributs : `source` (`override` / `schedule`), `mode`, `enabled`. |
+| `sensor.thermostat_planner_next_change` | Horodatage du prochain **changement de consigne** (les plages consécutives à la même température sont fusionnées) ; pendant une dérogation, sa fin. Inconnu si aucun changement n'est prévu (programmation en pause, consigne unique toute la semaine). Attributs : `next_temperature`, `source`. |
+| `sensor.thermostat_planner_mode` | Mode effectif `home` ou `away`. Attributs : `manual_mode`, `forced_by_entity`, `target_temperature` (consigne prévue par le planning), `next_change`, `override_temperature`, `override_until`, `enabled`. |
+
+Exemple : préchauffer la salle de bain 30 min avant chaque changement.
+```yaml
+triggers:
+  - trigger: time
+    at:
+      entity_id: sensor.thermostat_planner_next_change
+      offset: "-00:30:00"
+```
+
 - Service `thermostat_planner.set_mode` (`mode: home | away`) pour tes automatisations.
 - Service `thermostat_planner.set_override` (`temperature`, `duration` facultative, ex. `"02:00:00"`) : dérogation jusqu'à la prochaine plage ou pendant la durée donnée.
 - Service `thermostat_planner.clear_override` : reprend le planning.

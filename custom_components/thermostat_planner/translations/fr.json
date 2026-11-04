@@ -34,5 +34,69 @@
         }
       }
     }
+  },
+  "entity": {
+    "select": {
+      "manual_mode": {
+        "name": "Mode manuel",
+        "state": {
+          "home": "Maison",
+          "away": "Absent"
+        },
+        "state_attributes": {
+          "effective_mode": {
+            "name": "Mode effectif",
+            "state": {
+              "home": "Maison",
+              "away": "Absent"
+            }
+          },
+          "forced_by_entity": {
+            "name": "Forcé par l'entité"
+          }
+        }
+      }
+    },
+    "switch": {
+      "scheduling": {
+        "name": "Programmation"
+      }
+    },
+    "sensor": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "home": "Maison",
+          "away": "Absent"
+        }
+      },
+      "target": {
+        "name": "Consigne prévue",
+        "state_attributes": {
+          "source": {
+            "name": "Origine",
+            "state": {
+              "schedule": "Planning",
+              "override": "Dérogation"
+            }
+          }
+        }
+      },
+      "next_change": {
+        "name": "Prochain changement",
+        "state_attributes": {
+          "next_temperature": {
+            "name": "Température suivante"
+          },
+          "source": {
+            "name": "Origine",
+            "state": {
+              "schedule": "Planning",
+              "override": "Fin de la dérogation"
+            }
+          }
+        }
+      }
+    }
   }
 }

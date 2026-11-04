@@ -68,4 +68,30 @@ for mut in bad:
     try: sched.validate(x)
     except vol.Invalid: continue
     raise AssertionError("should have failed")
+# prochain changement effectif (les segments de même consigne sont fusionnés)
+d2 = sched.default_data()
+assert sched.next_block(d2, "home", mon(6, 0)) == (mon(6, 30), 21.0)
+# lundi 23:30 : 00:00 mardi est aussi à 18 °C, le changement suivant est 06:30
+assert sched.next_block(d2, "home", mon(23, 30)) == (datetime(2026, 10, 27, 6, 30), 21.0)
+# vendredi 23:30 -> samedi 08:00 (week-end)
+assert sched.next_block(d2, "home", datetime(2026, 10, 30, 23, 30)) == (sat(8, 0), 21.0)
+# consigne unique toute la semaine : aucun changement
+assert sched.next_block(d2, "away", mon(12, 0)) is None
+
+p = sched.planned(d2, "home", None, mon(7, 0))
+assert p == {"target": 21.0, "source": "schedule", "next_change": mon(8, 0), "next_target": 18.0}
+p = sched.planned(d2, "away", None, mon(7, 0))
+assert p == {"target": 16.0, "source": "schedule", "next_change": None, "next_target": None}
+ovr2 = {"mode": "home", "temp": 23, "until": mon(18, 0).isoformat()}
+p = sched.planned(d2, "home", ovr2, mon(12, 0))
+assert p == {"target": 23.0, "source": "override", "next_change": mon(18, 0), "next_target": 21.0}
+# dérogation d'un autre mode : ignorée
+assert sched.planned(d2, "away", ovr2, mon(12, 0))["source"] == "schedule"
+# planification en pause : consigne prévue conservée, aucun changement prévu
+d2["enabled"] = False
+p = sched.planned(d2, "home", None, mon(7, 0))
+assert p == {"target": 21.0, "source": "schedule", "next_change": None, "next_target": None}
+p = sched.planned(d2, "home", ovr2, mon(12, 0))
+assert p == {"target": 23.0, "source": "override", "next_change": mon(18, 0), "next_target": None}
+
 print("python OK")

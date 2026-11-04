@@ -179,3 +179,53 @@ def next_change(data: dict[str, Any], mode: str, now: datetime) -> datetime | No
                 hour=start // 60, minute=start % 60, second=0, microsecond=0
             )
     return None
+
+
+def next_block(
+    data: dict[str, Any], mode: str, now: datetime
+) -> tuple[datetime, float] | None:
+    """Prochain changement effectif de consigne : (début, température), ou None.
+
+    Comme `block_start`, les segments consécutifs de même consigne ne comptent
+    pas : on enchaîne `next_change` jusqu'à une température différente, sur
+    8 jours au plus.
+    """
+    current = target_for(data, mode, now)
+    limit = now + timedelta(days=8)
+    when = next_change(data, mode, now)
+    while when is not None and when <= limit:
+        temp = target_for(data, mode, when)
+        if temp != current:
+            return when, temp
+        when = next_change(data, mode, when)
+    return None
+
+
+def planned(
+    data: dict[str, Any], mode: str, override: dict[str, Any] | None, now: datetime
+) -> dict[str, Any]:
+    """Consigne prévue maintenant et prochain changement, pour les entités.
+
+    - `target` : consigne de la dérogation en cours, sinon celle du planning
+      (même planification en pause : c'est la consigne *prévue*) ;
+    - `source` : "override" ou "schedule" ;
+    - `next_change` / `next_target` : prochain changement de consigne. Pendant
+      une dérogation, c'est sa fin (puis la consigne du planning à cet instant,
+      ou None si la planification est en pause : rien ne sera renvoyé).
+      Planification en pause sans dérogation : None (aucun changement prévu).
+    """
+    if override_active(override, mode, now):
+        until = datetime.fromisoformat(override["until"])
+        return {
+            "target": float(override["temp"]),
+            "source": "override",
+            "next_change": until,
+            "next_target": target_for(data, mode, until) if data["enabled"] else None,
+        }
+    following = next_block(data, mode, now) if data["enabled"] else None
+    return {
+        "target": target_for(data, mode, now),
+        "source": "schedule",
+        "next_change": following[0] if following else None,
+        "next_target": following[1] if following else None,
+    }

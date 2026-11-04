@@ -41,7 +41,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.SELECT, Platform.SENSOR, Platform.SWITCH]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 STORAGE_VERSION = 1
@@ -62,6 +62,8 @@ class Planner:
         self.data: dict[str, Any] = schedule.default_data()
         self._applied: dict[str, Any] | None = None
         self.override: dict[str, Any] | None = None
+        # Dernier état publié aux entités et à la carte (voir _tick).
+        self._published: tuple | None = None
         self._unsubs: list = []
 
     # -- options ---------------------------------------------------------
@@ -125,6 +127,10 @@ class Planner:
             return "away"
         return self.data["manual_mode"]
 
+    def planned(self) -> dict[str, Any]:
+        """Consigne prévue et prochain changement (dérogation comprise)."""
+        return schedule.planned(self.data, self.effective_mode, self.override, dt_util.now())
+
     def state_dict(self) -> dict[str, Any]:
         now = dt_util.now()
         mode = self.effective_mode
@@ -146,6 +152,10 @@ class Planner:
         await self._store.async_save(self.data)
         await self._async_apply()
         self._notify()
+
+    async def async_set_enabled(self, enabled: bool) -> None:
+        """Active ou met en pause la planification (même chemin que la sauvegarde)."""
+        await self.async_save({**self.data, "enabled": bool(enabled)})
 
     async def async_set_mode(self, mode: str) -> None:
         if mode not in MODES:
@@ -227,14 +237,22 @@ class Planner:
         self._applied = applied
         await self._applied_store.async_save(applied)
 
+    def _snapshot(self) -> tuple:
+        """État vu par les entités et la carte (une partie dépend de l'heure)."""
+        return self.state_dict(), self.planned()
+
     @callback
     def _notify(self) -> None:
+        self._published = self._snapshot()
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     async def _tick(self, _now) -> None:
+        """Chaque minute : applique la consigne, puis prévient les entités et la
+        carte si l'état publié a changé (nouvelle plage, dérogation échue, ou
+        simple passage d'un segment, même planification en pause)."""
         before = (self._applied, self.override)
         await self._async_apply()
-        if (self._applied, self.override) != before:
+        if (self._applied, self.override) != before or self._snapshot() != self._published:
             self._notify()
 
     async def _away_changed(self, _event: Event) -> None:
