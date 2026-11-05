@@ -94,4 +94,51 @@ assert p == {"target": 21.0, "source": "schedule", "next_change": None, "next_ta
 p = sched.planned(d2, "home", ovr2, mon(12, 0))
 assert p == {"target": 23.0, "source": "override", "next_change": mon(18, 0), "next_target": None}
 
+# -- multi-thermostat -------------------------------------------------------
+# données d'avant zone_away : toujours valides, drapeau à False
+old = sched.default_data(); del old["zone_away"]
+assert sched.validate(old)["zone_away"] is False
+assert sched.validate({**sched.default_data(), "zone_away": True})["zone_away"] is True
+
+em = sched.effective_mode
+assert em("home", False, False) == "home"
+assert em("away", False, False) == "away", "mode commun Absent : toutes les zones"
+assert em("home", True, False) == "away", "entité d'absence de la zone"
+assert em("home", False, True) == "away", "zone absente"
+assert em("away", False, True) == "away"
+
+R = sched.resolve_entry
+def err(fn):
+    try: fn()
+    except sched.ResolveError as e: return e.code
+    raise AssertionError("ResolveError attendue")
+one = {"e1": "climate.salon"}
+two = {"e1": "climate.salon", "e2": "climate.chambre"}
+assert err(lambda: R({})) == "not_loaded"
+assert R(one) == "e1", "une seule entrée, sans paramètre : comportement historique"
+assert err(lambda: R(two)) == "ambiguous"
+assert R(two, entry_id="e2") == "e2"
+assert R(two, climate="climate.chambre") == "e2"
+assert R(two, "e1", "climate.salon") == "e1"
+assert err(lambda: R(two, "e1", "climate.chambre")) == "not_found", "entry_id et climate contradictoires"
+assert err(lambda: R(two, entry_id="zz")) == "not_found"
+assert err(lambda: R(one, climate="climate.zz")) == "not_found"
+assert err(lambda: R(one, entry_id="zz")) == "not_found", "un entry_id inconnu n'est jamais ignoré"
+
+assert sched.legacy_store_key("data") == "thermostat_planner.data"
+assert sched.store_key("abc", "applied") == "thermostat_planner.abc.applied"
+
+claim = sched.may_claim_legacy
+assert claim(None, "e1", []), "première entrée chargée"
+assert claim(None, "e1", ["e1"])
+assert not claim(None, "e2", ["e1"]), "l'entrée historique est prioritaire"
+assert claim("e1", "e1", []), "migration interrompue : reprise par le même propriétaire"
+assert not claim("e1", "e2", []), "jamais reprise par une autre entrée"
+assert not claim("e1", "e2", ["e2"])
+
+plan = sched.legacy_copy_plan
+assert plan({"data": {"a": 1}, "applied": {"b": 2}, "override": None}, {}) == ["data", "applied"]
+assert plan({"data": {"a": 1}}, {"data": {"a": 9}}) == [], "le nouveau stockage n'est jamais écrasé"
+assert plan({}, {}) == []
+
 print("python OK")

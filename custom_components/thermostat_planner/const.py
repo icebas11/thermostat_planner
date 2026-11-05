@@ -1,13 +1,14 @@
 """Constantes de Thermostat Planner."""
 
 DOMAIN = "thermostat_planner"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 CONF_CLIMATE = "climate_entity"
 CONF_AWAY_ENTITY = "away_entity"
 CONF_AWAY_STATE = "away_state"
 CONF_RESTRICT_EDIT = "restrict_edit"
 CONF_EDITORS = "editors"
+CONF_ZONE_NAME = "zone_name"
 
 DEFAULT_CLIMATE = "climate.thermostat"
 DEFAULT_AWAY_STATE = "not_home"
@@ -20,6 +21,7 @@ SCHEDULE_KEYS = ("all", "weekdays", "weekend") + DAY_KEYS
 MIN_TEMP = 5.0
 MAX_TEMP = 35.0
 
+# Signal propre à chaque entrée : f"{SIGNAL_UPDATE}_{entry_id}".
 SIGNAL_UPDATE = f"{DOMAIN}_update"
 
 CARD_URL = f"/{DOMAIN}/thermostat-planner-card.js"

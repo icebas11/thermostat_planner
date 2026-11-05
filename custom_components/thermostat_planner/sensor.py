@@ -16,7 +16,7 @@ from .entity import PlannerEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    planner = hass.data[DOMAIN][entry.entry_id]
+    planner = hass.data[DOMAIN].planners[entry.entry_id]
     async_add_entities(
         [
             PlannerModeSensor(planner, entry),
@@ -48,6 +48,7 @@ class PlannerModeSensor(PlannerEntity, SensorEntity):
         return {
             "manual_mode": self._planner.data["manual_mode"],
             "forced_by_entity": state["forced_by_entity"],
+            "zone_away": state["zone_away"],
             "target_temperature": state["target"],
             "next_change": state["next_change"],
             "override_temperature": override.get("temp"),

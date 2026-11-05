@@ -4,17 +4,21 @@
       "user": {
         "title": "Thermostat Planner",
         "data": {
+          "zone_name": "Zone name (optional)",
           "climate_entity": "Thermostat",
           "away_entity": "Entity that forces Away mode (optional)",
           "away_state": "State meaning Away"
         },
         "data_description": {
+          "zone_name": "Defaults to the thermostat name. Used as the device name.",
+          "away_entity": "Forces this zone to Away when the entity is in the state below. Pre-filled from an existing zone.",
           "away_state": "For a person entity use not_home; for a switch or alarm use on, armed_away, etc."
-        }
+        },
+        "description": "One entry per thermostat (zone). The Home / Away mode is shared by every zone; each zone can also be set to Away on its own."
       }
     },
     "abort": {
-      "already_configured": "Thermostat Planner is already configured."
+      "already_configured": "This thermostat is already managed by Thermostat Planner."
     }
   },
   "options": {
@@ -33,6 +37,9 @@
           "editors": "Administrators are always allowed."
         }
       }
+    },
+    "error": {
+      "climate_in_use": "This thermostat is already managed by another Thermostat Planner zone."
     }
   },
   "entity": {
@@ -53,6 +60,9 @@
           },
           "forced_by_entity": {
             "name": "Forced by entity"
+          },
+          "zone_away": {
+            "name": "Zone away"
           }
         }
       }
@@ -60,6 +70,9 @@
     "switch": {
       "scheduling": {
         "name": "Scheduling"
+      },
+      "zone_away": {
+        "name": "Zone away"
       }
     },
     "sensor": {

@@ -160,4 +160,39 @@ assert.equal(stepSetpoint(5, 0, SL), 7, "une ancienne consigne trop basse est ra
 assert.equal(stepSetpoint(27, 1, SL), 28);
 assert.equal(stepSetpoint(28, 1, SL), 28);
 
+// ---- zone visée (multi-thermostat) -----------------------------------------
+const { targetOf, withTarget, defaultTitle, subscribeErrorKey } = H;
+assert.deepEqual(targetOf({}), {}, "sans paramètre : zone unique, comportement historique");
+assert.deepEqual(targetOf(undefined), {});
+assert.deepEqual(targetOf({ entry_id: " abc " }), { entry_id: "abc" });
+assert.deepEqual(targetOf({ climate: "climate.chambre", title: "x" }), { climate: "climate.chambre" });
+assert.deepEqual(targetOf({ entry_id: "abc", climate: "climate.chambre" }), { entry_id: "abc", climate: "climate.chambre" });
+assert.deepEqual(targetOf({ entry_id: "", climate: null }), {});
+assert.throws(() => targetOf({ entry_id: 12 }), /entry_id/);
+assert.throws(() => targetOf({ climate: "sensor.x" }), /climate/);
+
+assert.deepEqual(withTarget({ type: "t", mode: "away" }, { entry_id: "abc" }), { type: "t", mode: "away", entry_id: "abc" });
+assert.deepEqual(withTarget({ type: "t" }, {}), { type: "t" }, "aucun paramètre ajouté sans zone");
+assert.deepEqual(withTarget({ type: "t" }, undefined), { type: "t" });
+
+assert.equal(defaultTitle("Planning", null), "Planning");
+assert.equal(defaultTitle("Planning", { zone_count: 1, zone_name: "Salon" }), "Planning", "une zone : titre inchangé");
+assert.equal(defaultTitle("Planning", { zone_count: 2, zone_name: "Salon" }), "Planning · Salon");
+assert.equal(defaultTitle("Planning", { zone_name: "Salon" }), "Planning", "ancien serveur sans zone_count");
+
+assert.equal(subscribeErrorKey({ code: "ambiguous" }), "ambiguous");
+assert.equal(subscribeErrorKey({ code: "not_found" }), "notFound");
+assert.equal(subscribeErrorKey({ code: "unknown_command" }), null);
+assert.equal(subscribeErrorKey(undefined), null);
+
+// ---- « Absent pour cette zone uniquement » (option show_zone_away) ----------
+const { zoneAwayDisplay } = H;
+assert.equal(zoneAwayDisplay({}, { zone_away: false, zone_count: 2 }), null, "masqué par défaut, même avec plusieurs zones");
+assert.equal(zoneAwayDisplay({}, { zone_away: true }), "hint", "option absente mais zone absente : simple mention");
+assert.equal(zoneAwayDisplay({ show_zone_away: true }, { zone_away: false }), "row");
+assert.equal(zoneAwayDisplay({ show_zone_away: true }, { zone_away: true, zone_count: 1 }), "row");
+assert.equal(zoneAwayDisplay({ show_zone_away: "true" }, { zone_away: false }), null, "seul true active l'option");
+assert.equal(zoneAwayDisplay({ show_zone_away: true }, { data: {} }), null, "ancien serveur sans zone_away");
+assert.equal(zoneAwayDisplay(undefined, null), null);
+
 console.log("js OK");
