@@ -125,15 +125,15 @@ et liste des plages sur plusieurs colonnes sur les cartes larges.
 - **Mise à jour depuis la v0.4 ou avant** : les anciens fichiers `.storage/thermostat_planner.data`, `.applied` et `.override` sont repris une seule fois par le thermostat déjà configuré, puis supprimés une fois la copie relue et vérifiée. Si l'écriture échoue, ils sont conservés et utilisés tels quels, et la reprise est retentée au démarrage suivant. Le planning, le mode, la dérogation en cours et les `entity_id` existants sont conservés.
 
 ## Entités et services
-Les entités de chaque zone sont rattachées à l'appareil de la zone (nommé **Thermostat Planner** pour un thermostat configuré avant le multi-thermostat, sinon d'après la zone) et utilisables dans les automatisations, les assistants vocaux et l'historique. Les `entity_id` indiqués sont ceux créés par défaut pour le premier thermostat (Home Assistant les dérive du nom de l'appareil et des noms des entités) ; pour une autre zone, `thermostat_planner` est remplacé par le nom de la zone (ex. `select.chambre_manual_mode`). Tu peux les renommer.
+Les entités de chaque zone sont rattachées à l'appareil de la zone (nommé **Thermostat Planner** pour un thermostat configuré avant le multi-thermostat, sinon d'après la zone) et utilisables dans les automatisations, les assistants vocaux et l'historique. Les `entity_id` indiqués sont ceux créés par défaut pour le premier thermostat, avec Home Assistant en français (entre parenthèses, en anglais) : Home Assistant les dérive du nom de l'appareil et du nom traduit de l'entité. Pour une autre zone, `thermostat_planner` est remplacé par le nom de la zone (ex. `select.chauffage_sdb_mode_manuel`). Tu peux les renommer.
 
 | Entité | Rôle |
 |---|---|
-| `select.thermostat_planner_manual_mode` | Mode manuel *Maison* / *Absent* (`home` / `away`), **commun à toutes les zones**, comme le bouton de la carte ou le service `set_mode`. Attributs : `effective_mode` (mode réellement appliqué à la zone, `away` si l'entité d'absence ou *Zone absente* le force), `forced_by_entity`, `zone_away`. |
-| `switch.thermostat_planner_zone_away` | *Zone absente* : force cette seule zone en Absent. Ouvert à tous, comme le mode. |
-| `switch.thermostat_planner_scheduling` | Programmation activée ou en pause. Avec l'option *Restreindre la modification du planning*, seuls les administrateurs et les utilisateurs autorisés peuvent la changer depuis l'interface ; les automatisations le peuvent toujours. |
-| `sensor.thermostat_planner_planned_setpoint` | Consigne prévue maintenant (°C) : celle de la dérogation en cours, sinon celle du planning (même programmation en pause). Attributs : `source` (`override` / `schedule`), `mode`, `enabled`. |
-| `sensor.thermostat_planner_next_change` | Horodatage du prochain **changement de consigne** (les plages consécutives à la même température sont fusionnées) ; pendant une dérogation, sa fin. Inconnu si aucun changement n'est prévu (programmation en pause, consigne unique toute la semaine). Attributs : `next_temperature`, `source`. |
+| `select.thermostat_planner_mode_manuel` (`…_manual_mode`) | Mode manuel *Maison* / *Absent* (`home` / `away`), **commun à toutes les zones**, comme le bouton de la carte ou le service `set_mode`. Attributs : `effective_mode` (mode réellement appliqué à la zone, `away` si l'entité d'absence ou *Zone absente* le force), `forced_by_entity`, `zone_away`. |
+| `switch.thermostat_planner_zone_absente` (`…_zone_away`) | *Zone absente* : force cette seule zone en Absent. Ouvert à tous, comme le mode. |
+| `switch.thermostat_planner_programmation` (`…_scheduling`) | Programmation activée ou en pause. Avec l'option *Restreindre la modification du planning*, seuls les administrateurs et les utilisateurs autorisés peuvent la changer depuis l'interface ; les automatisations le peuvent toujours. |
+| `sensor.thermostat_planner_consigne_prevue` (`…_planned_setpoint`) | Consigne prévue maintenant (°C) : celle de la dérogation en cours, sinon celle du planning (même programmation en pause). Attributs : `source` (`override` / `schedule`), `mode`, `enabled`. |
+| `sensor.thermostat_planner_prochain_changement` (`…_next_change`) | Horodatage du prochain **changement de consigne** (les plages consécutives à la même température sont fusionnées) ; pendant une dérogation, sa fin. Inconnu si aucun changement n'est prévu (programmation en pause, consigne unique toute la semaine). Attributs : `next_temperature`, `source`. |
 | `sensor.thermostat_planner_mode` | Mode effectif `home` ou `away`. Attributs : `manual_mode`, `forced_by_entity`, `zone_away`, `target_temperature` (consigne prévue par le planning), `next_change`, `override_temperature`, `override_until`, `enabled`. |
 
 Exemple : préchauffer la salle de bain 30 min avant chaque changement.
@@ -141,7 +141,7 @@ Exemple : préchauffer la salle de bain 30 min avant chaque changement.
 triggers:
   - trigger: time
     at:
-      entity_id: sensor.thermostat_planner_next_change
+      entity_id: sensor.thermostat_planner_prochain_changement
       offset: "-00:30:00"
 ```
 
