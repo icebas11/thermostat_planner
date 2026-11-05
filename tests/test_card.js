@@ -185,4 +185,14 @@ assert.equal(subscribeErrorKey({ code: "not_found" }), "notFound");
 assert.equal(subscribeErrorKey({ code: "unknown_command" }), null);
 assert.equal(subscribeErrorKey(undefined), null);
 
+// ---- « Absent pour cette zone uniquement » (option show_zone_away) ----------
+const { zoneAwayDisplay } = H;
+assert.equal(zoneAwayDisplay({}, { zone_away: false, zone_count: 2 }), null, "masqué par défaut, même avec plusieurs zones");
+assert.equal(zoneAwayDisplay({}, { zone_away: true }), "hint", "option absente mais zone absente : simple mention");
+assert.equal(zoneAwayDisplay({ show_zone_away: true }, { zone_away: false }), "row");
+assert.equal(zoneAwayDisplay({ show_zone_away: true }, { zone_away: true, zone_count: 1 }), "row");
+assert.equal(zoneAwayDisplay({ show_zone_away: "true" }, { zone_away: false }), null, "seul true active l'option");
+assert.equal(zoneAwayDisplay({ show_zone_away: true }, { data: {} }), null, "ancien serveur sans zone_away");
+assert.equal(zoneAwayDisplay(undefined, null), null);
+
 console.log("js OK");

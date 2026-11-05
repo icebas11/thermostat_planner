@@ -44,6 +44,7 @@ climate: climate.salon      # obligatoire avec plusieurs thermostats (ou entry_i
 title: Planning chauffage   # facultatif
 expand_today: false         # facultatif : ne pas déplier le jour en cours (true par défaut)
 show_controls: true         # facultatif : boutons − / + de réglage immédiat (true par défaut)
+show_zone_away: true        # facultatif : interrupteur « Absent pour cette zone uniquement » (masqué par défaut)
 override_duration: 120      # facultatif : durée d'une dérogation en minutes (par défaut : jusqu'à la prochaine plage)
 colors:                     # facultatif : couleur des plages par paliers de température
   - max: 18
@@ -76,9 +77,10 @@ titre par défaut est alors suivi du nom de la zone.
 **Mode Absent** :
 - le mode **Maison / Absent** est **commun à toutes les zones** : l'interrupteur de n'importe quelle carte, le
   sélecteur de n'importe quelle zone ou le service `set_mode` les basculent toutes ;
-- **Absent pour cette zone uniquement** (interrupteur affiché sur la carte dès qu'il y a plusieurs zones, entité
-  *Zone absente*, service `set_zone_away`) force une seule zone en Absent, par exemple une chambre d'amis
-  inoccupée ; les autres zones suivent le mode commun ;
+- **Absent pour cette zone uniquement** (entité *Zone absente*, service `set_zone_away`, et interrupteur sur la
+  carte avec l'option `show_zone_away: true`) force une seule zone en Absent, par exemple une chambre d'amis
+  inoccupée ; les autres zones suivent le mode commun. Sans l'option, l'interrupteur n'est pas affiché ; si la
+  zone est forcée en Absent, la carte l'indique simplement sous « Passer en mode Absent » ;
 - l'**entité d'absence** se règle par zone (*Configurer*) et ne force que sa zone ;
 - une zone est donc Absent si le mode commun est Absent, **ou** si son entité d'absence est dans l'état « absent »,
   **ou** si elle est marquée *Zone absente*. Elle n'est jamais Maison quand le mode commun est Absent.

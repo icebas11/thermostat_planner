@@ -60,6 +60,7 @@
       allZones: "S'applique à toutes les zones",
       zoneAway: "Absent pour cette zone uniquement",
       zoneAwayHint: "Les autres zones suivent le mode commun",
+      zoneAwayOn: "Cette zone est forcée en Absent (Zone absente)",
       ambiguous: "Plusieurs thermostats sont configurés : ajoute entry_id ou climate dans la configuration de la carte.",
       notFound: "Zone introuvable : vérifie entry_id ou climate dans la configuration de la carte.",
       eEmpty: "Renseigne une heure valide.",
@@ -117,6 +118,7 @@
       allZones: "Applies to every zone",
       zoneAway: "Away for this zone only",
       zoneAwayHint: "Other zones follow the shared mode",
+      zoneAwayOn: "This zone is forced to Away (Zone away)",
       ambiguous: "Several thermostats are configured: add entry_id or climate to the card configuration.",
       notFound: "Zone not found: check entry_id or climate in the card configuration.",
       eEmpty: "Enter a valid time.",
@@ -331,6 +333,18 @@
   /** Titre par défaut : suivi du nom de la zone dès qu'il y a plusieurs zones. */
   function defaultTitle(base, state) {
     return state && state.zone_count > 1 && state.zone_name ? `${base} · ${state.zone_name}` : base;
+  }
+
+  /**
+   * Affichage de « Absent pour cette zone uniquement » :
+   * "row" (interrupteur, option show_zone_away: true), "hint" (option absente mais
+   * zone forcée en Absent : simple mention, pour expliquer le mode), ou null.
+   * Ancien serveur sans zone_away : rien.
+   */
+  function zoneAwayDisplay(config, state) {
+    if (!state || state.zone_away === undefined) return null;
+    if (config && config.show_zone_away === true) return "row";
+    return state.zone_away ? "hint" : null;
   }
 
   /** Clé de traduction d'une erreur d'abonnement (null : message générique « non chargé »). */
@@ -918,12 +932,14 @@
         const tab = (name) =>
           `<button class="tab ${this._profile === name ? "on" : ""}" data-action="tab" data-profile="${name}">${esc(t[name])}${s.effective_mode === name ? `<span class="dot" title="${esc(t.activeBadge)}"></span>` : ""}</button>`;
         const multi = s.zone_count > 1;
+        // « Zone absente » : ligne affichée seulement avec l'option show_zone_away.
+        const zoneMode = zoneAwayDisplay(this._config, s);
         const forced =
           (multi ? `<div class="hint">${esc(t.allZones)}</div>` : "") +
-          (s.forced_by_entity ? `<div class="hint">${esc(t.forcedBy)} ${esc(s.away_entity)}</div>` : "");
-        // « Zone absente » : utile seulement avec plusieurs zones (ou pour la désactiver).
+          (s.forced_by_entity ? `<div class="hint">${esc(t.forcedBy)} ${esc(s.away_entity)}</div>` : "") +
+          (zoneMode === "hint" ? `<div class="hint">${esc(t.zoneAwayOn)}</div>` : "");
         const zoneAway =
-          s.zone_away !== undefined && (multi || s.zone_away)
+          zoneMode === "row"
             ? `<div class="row"><div><div class="label">${esc(t.zoneAway)}</div><div class="hint">${esc(t.zoneAwayHint)}</div></div>
             <label class="switch"><input type="checkbox" data-action="zone-away-switch" ${s.zone_away ? "checked" : ""}><span></span></label></div>`
             : "";
@@ -1096,7 +1112,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, targetOf, withTarget, defaultTitle, subscribeErrorKey };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);

@@ -29,7 +29,7 @@ Everything lives in `custom_components/thermostat_planner/`.
   - `select.py` — `manual_mode`, writes through `Planner.async_set_mode` → `Shared.async_set_manual_mode` (common to all zones, open to all).
   - `switch.py` — `scheduling` (`data.enabled`), writes through `Planner.async_set_enabled` → `_async_apply`. Checks `can_edit` on the calling user (`self._context.user_id`); calls without a user (automations) are allowed. `zone_away` (`data.zone_away`), open to all.
   - Pure logic for these lives in `schedule.py`: `next_block`, `planned`.
-- **`www/thermostat-planner-card.js`** — vanilla custom element (shadow DOM, full `innerHTML` re-render, event delegation through `data-action` attributes). It subscribes to `thermostat_planner/subscribe` and saves the **whole** `data` object (debounced) via `thermostat_planner/save`. Card config `entry_id` / `climate` (`targetOf`) is added to every command (`withTarget`); without it the card targets the only zone. The "Away for this zone only" row shows when `zone_count > 1` (or `zone_away` is on).
+- **`www/thermostat-planner-card.js`** — vanilla custom element (shadow DOM, full `innerHTML` re-render, event delegation through `data-action` attributes). It subscribes to `thermostat_planner/subscribe` and saves the **whole** `data` object (debounced) via `thermostat_planner/save`. Card config `entry_id` / `climate` (`targetOf`) is added to every command (`withTarget`); without it the card targets the only zone. The "Away for this zone only" row shows only with the card option `show_zone_away: true` (default hidden, user's choice); without it, an active `zone_away` is just mentioned as a hint (`zoneAwayDisplay`).
 
 ### Zones and Away mode
 
