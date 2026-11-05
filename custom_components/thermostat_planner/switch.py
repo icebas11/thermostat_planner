@@ -1,4 +1,4 @@
-"""Interrupteur : planification activée (flag `enabled` des données)."""
+"""Interrupteurs : planification activée (`enabled`) et zone absente (`zone_away`)."""
 from __future__ import annotations
 
 from typing import Any
@@ -16,7 +16,8 @@ from .entity import PlannerEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([PlannerSchedulingSwitch(hass.data[DOMAIN][entry.entry_id], entry)])
+    planner = hass.data[DOMAIN].planners[entry.entry_id]
+    async_add_entities([PlannerSchedulingSwitch(planner, entry), PlannerZoneAwaySwitch(planner, entry)])
 
 
 class PlannerSchedulingSwitch(PlannerEntity, SwitchEntity):
@@ -51,3 +52,25 @@ class PlannerSchedulingSwitch(PlannerEntity, SwitchEntity):
             if not self._planner.can_edit(user):
                 raise Unauthorized(context=context, entity_id=self.entity_id)
         await self._planner.async_set_enabled(enabled)
+
+
+class PlannerZoneAwaySwitch(PlannerEntity, SwitchEntity):
+    """Force cette seule zone en Absent, quel que soit le mode commun.
+
+    Ouvert à tous, comme le mode Maison / Absent (`set_zone_away`).
+    """
+
+    _attr_icon = "mdi:home-export-outline"
+
+    def __init__(self, planner, entry: ConfigEntry) -> None:
+        super().__init__(planner, entry, "zone_away")
+
+    @property
+    def is_on(self) -> bool:
+        return self._planner.zone_away
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._planner.async_set_zone_away(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._planner.async_set_zone_away(False)

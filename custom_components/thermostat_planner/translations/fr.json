@@ -4,17 +4,21 @@
       "user": {
         "title": "Thermostat Planner",
         "data": {
+          "zone_name": "Nom de la zone (facultatif)",
           "climate_entity": "Thermostat",
           "away_entity": "Entité qui force le mode Absent (facultatif)",
           "away_state": "État signifiant Absent"
         },
         "data_description": {
+          "zone_name": "Par défaut, le nom du thermostat. Sert de nom d'appareil.",
+          "away_entity": "Force cette zone en Absent quand l'entité est dans l'état ci-dessous. Pré-rempli avec celle d'une zone existante.",
           "away_state": "Pour une entité person : not_home ; pour un interrupteur ou une alarme : on, armed_away, etc."
-        }
+        },
+        "description": "Une entrée par thermostat (zone). Le mode Maison / Absent est commun à toutes les zones ; chaque zone peut en plus être mise en Absent seule."
       }
     },
     "abort": {
-      "already_configured": "Thermostat Planner est déjà configuré."
+      "already_configured": "Ce thermostat est déjà géré par Thermostat Planner."
     }
   },
   "options": {
@@ -33,6 +37,9 @@
           "editors": "Les administrateurs ont toujours le droit."
         }
       }
+    },
+    "error": {
+      "climate_in_use": "Ce thermostat est déjà géré par une autre zone Thermostat Planner."
     }
   },
   "entity": {
@@ -53,6 +60,9 @@
           },
           "forced_by_entity": {
             "name": "Forcé par l'entité"
+          },
+          "zone_away": {
+            "name": "Zone absente"
           }
         }
       }
@@ -60,6 +70,9 @@
     "switch": {
       "scheduling": {
         "name": "Programmation"
+      },
+      "zone_away": {
+        "name": "Zone absente"
       }
     },
     "sensor": {

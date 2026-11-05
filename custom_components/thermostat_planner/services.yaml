@@ -1,6 +1,6 @@
 set_mode:
   name: Définir le mode
-  description: Choisit le mode manuel (Maison ou Absent).
+  description: Choisit le mode manuel (Maison ou Absent), commun à toutes les zones. Une zone indiquée est seulement vérifiée.
   fields:
     mode:
       name: Mode
@@ -12,6 +12,48 @@ set_mode:
           options:
             - home
             - away
+    entry_id:
+      name: Zone
+      description: Facultatif avec un seul thermostat. Entrée Thermostat Planner visée (ou utiliser climate).
+      required: false
+      selector:
+        config_entry:
+          integration: thermostat_planner
+    climate:
+      name: Thermostat
+      description: Facultatif avec un seul thermostat. Thermostat de la zone visée (à la place de entry_id).
+      required: false
+      example: climate.chambre
+      selector:
+        entity:
+          domain: climate
+
+set_zone_away:
+  name: Zone absente
+  description: Force une seule zone en Absent (ou la rend au mode commun), quel que soit le mode Maison / Absent commun.
+  fields:
+    away:
+      name: Absente
+      description: true pour forcer la zone en Absent, false pour suivre le mode commun.
+      required: true
+      example: true
+      selector:
+        boolean:
+    entry_id:
+      name: Zone
+      description: Facultatif avec un seul thermostat. Entrée Thermostat Planner visée (ou utiliser climate).
+      required: false
+      selector:
+        config_entry:
+          integration: thermostat_planner
+    climate:
+      name: Thermostat
+      description: Facultatif avec un seul thermostat. Thermostat de la zone visée (à la place de entry_id).
+      required: false
+      example: climate.chambre
+      selector:
+        entity:
+          domain: climate
 
 set_override:
   name: Déroger au planning
@@ -35,7 +77,38 @@ set_override:
       example: "02:00:00"
       selector:
         duration:
+    entry_id:
+      name: Zone
+      description: Facultatif avec un seul thermostat. Entrée Thermostat Planner visée (ou utiliser climate).
+      required: false
+      selector:
+        config_entry:
+          integration: thermostat_planner
+    climate:
+      name: Thermostat
+      description: Facultatif avec un seul thermostat. Thermostat de la zone visée (à la place de entry_id).
+      required: false
+      example: climate.chambre
+      selector:
+        entity:
+          domain: climate
 
 clear_override:
   name: Reprendre le planning
   description: Annule la dérogation en cours et renvoie la consigne de la plage actuelle.
+  fields:
+    entry_id:
+      name: Zone
+      description: Facultatif avec un seul thermostat. Entrée Thermostat Planner visée (ou utiliser climate).
+      required: false
+      selector:
+        config_entry:
+          integration: thermostat_planner
+    climate:
+      name: Thermostat
+      description: Facultatif avec un seul thermostat. Thermostat de la zone visée (à la place de entry_id).
+      required: false
+      example: climate.chambre
+      selector:
+        entity:
+          domain: climate

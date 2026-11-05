@@ -20,6 +20,7 @@ import voluptuous as vol
 
 from .const import (
     DAY_KEYS,
+    DOMAIN,
     LAYOUTS,
     MAX_TEMP,
     MIN_TEMP,
@@ -71,6 +72,8 @@ DATA_SCHEMA = vol.Schema(
     {
         vol.Required("manual_mode"): vol.In(MODES),
         vol.Required("enabled"): bool,
+        # Zone forcée en Absent, quel que soit le mode commun (multi-thermostat).
+        vol.Optional("zone_away", default=False): bool,
         vol.Required("profiles"): {
             vol.Required("home"): _PROFILE,
             vol.Required("away"): _PROFILE,
@@ -102,6 +105,7 @@ def default_data() -> dict[str, Any]:
         {
             "manual_mode": "home",
             "enabled": True,
+            "zone_away": False,
             "profiles": {"home": home, "away": away},
         }
     )
@@ -229,3 +233,102 @@ def planned(
         "next_change": following[0] if following else None,
         "next_target": following[1] if following else None,
     }
+
+
+# -- Plusieurs thermostats (une entrée de configuration par zone) ------------
+def effective_mode(manual_mode: str, forced_by_entity: bool, zone_away: bool) -> str:
+    """Mode effectif d'une zone.
+
+    Absent si le mode manuel commun est Absent, si l'entité d'absence de la
+    zone est dans l'état d'absence, ou si la zone est marquée « Zone absente ».
+    Une zone n'est donc jamais Maison quand le mode commun est Absent.
+    """
+    if manual_mode == "away" or forced_by_entity or zone_away:
+        return "away"
+    return manual_mode
+
+
+class ResolveError(Exception):
+    """Zone introuvable ou ambiguë. `code` sert de code d'erreur WebSocket."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def resolve_entry(
+    entries: dict[str, str], entry_id: str | None = None, climate: str | None = None
+) -> str:
+    """Choisit l'entrée visée par une commande.
+
+    `entries` : entry_id -> entité climate. `entry_id` et/ou `climate`
+    désignent la zone ; sans l'un ni l'autre, l'unique entrée est choisie.
+    Lève ResolveError : `not_loaded` (aucune entrée), `not_found` (zone
+    inconnue, ou entry_id et climate qui ne désignent pas la même zone),
+    `ambiguous` (plusieurs entrées et aucun paramètre).
+    """
+    if not entries:
+        raise ResolveError("not_loaded", "Thermostat Planner n'est pas chargé")
+    if entry_id:
+        if entry_id not in entries:
+            raise ResolveError("not_found", f"Aucune zone Thermostat Planner pour entry_id {entry_id}")
+        if climate and entries[entry_id] != climate:
+            raise ResolveError(
+                "not_found", f"L'entrée {entry_id} ne gère pas {climate} (elle gère {entries[entry_id]})"
+            )
+        return entry_id
+    if climate:
+        for key, entity in entries.items():
+            if entity == climate:
+                return key
+        raise ResolveError("not_found", f"Aucune zone Thermostat Planner pour {climate}")
+    if len(entries) > 1:
+        raise ResolveError(
+            "ambiguous",
+            "Plusieurs thermostats sont configurés : précise entry_id ou climate "
+            f"(thermostats : {', '.join(sorted(entries.values()))})",
+        )
+    return next(iter(entries))
+
+
+STORE_KINDS = ("data", "applied", "override")
+
+
+def legacy_store_key(kind: str) -> str:
+    """Fichier de stockage de la v0.4 et avant (un seul thermostat)."""
+    return f"{DOMAIN}.{kind}"
+
+
+def store_key(entry_id: str, kind: str) -> str:
+    """Fichier de stockage propre à une entrée : thermostat_planner.<entry_id>.<kind>."""
+    return f"{DOMAIN}.{entry_id}.{kind}"
+
+
+def may_claim_legacy(owner: str | None, entry_id: str, legacy_entry_ids: list[str]) -> bool:
+    """Cette entrée peut-elle reprendre les anciens fichiers de stockage ?
+
+    - un propriétaire est déjà enregistré (`owner`) : lui seul, ce qui rend
+      la migration rejouable après une interruption sans qu'une autre entrée
+      ne reprenne les mêmes données ;
+    - sinon, une entrée créée avant le multi-thermostat (`legacy_entry_ids`,
+      unique_id historique) est prioritaire ;
+    - sinon, la première entrée chargée.
+    """
+    if owner:
+        return owner == entry_id
+    if legacy_entry_ids:
+        return entry_id in legacy_entry_ids
+    return True
+
+
+def legacy_copy_plan(legacy: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    """Fichiers à copier : présents dans l'ancien stockage, absents du nouveau.
+
+    Un fichier déjà présent dans le nouveau stockage n'est jamais écrasé
+    (il peut avoir été modifié depuis une migration interrompue).
+    """
+    return [
+        kind
+        for kind in STORE_KINDS
+        if legacy.get(kind) is not None and current.get(kind) is None
+    ]

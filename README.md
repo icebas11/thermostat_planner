@@ -9,6 +9,7 @@ plages horaires colorées par température, modes **Maison** / **Absent**, et tr
 - **Plages** : ajouter, modifier (début, fin, température), supprimer, copier/coller un jour.
 - **Réglage immédiat** : boutons − / + sur la carte pour déroger au planning jusqu'à la prochaine plage.
 - **Passage en Absent** : manuel (interrupteur sur la carte) et/ou automatique via une entité de ton choix.
+- **Plusieurs thermostats (zones)** : un planning par thermostat, un mode Maison / Absent commun, et la possibilité de mettre une seule zone en Absent.
 
 ## Installation
 
@@ -39,6 +40,7 @@ Copie `custom_components/thermostat_planner/` dans `<config>/custom_components/`
 
 ```yaml
 type: custom:thermostat-planner-card
+climate: climate.salon      # obligatoire avec plusieurs thermostats (ou entry_id), voir « Plusieurs thermostats »
 title: Planning chauffage   # facultatif
 expand_today: false         # facultatif : ne pas déplier le jour en cours (true par défaut)
 show_controls: true         # facultatif : boutons − / + de réglage immédiat (true par défaut)
@@ -50,6 +52,38 @@ colors:                     # facultatif : couleur des plages par paliers de tem
     color: "#22c55e"
   - color: "#f97316"        # pas de borne = tout le reste
 ```
+
+### Plusieurs thermostats (zones)
+Chaque thermostat est une **entrée** de l'intégration, avec son propre planning, ses dérogations et ses entités.
+
+**Ajouter un second thermostat** : *Paramètres › Appareils et services › Thermostat Planner › Ajouter une entrée*.
+Choisis le thermostat et, si tu veux, le nom de la zone (par défaut, le nom du thermostat ; il sert de nom à
+l'appareil et donc aux `entity_id` des nouvelles entités). L'entité d'absence est pré-remplie avec celle d'une
+zone existante. Un thermostat déjà géré par une autre zone est refusé. La nouvelle zone part du planning par défaut.
+
+**Une carte par zone** : indique la zone avec `climate` (le thermostat de la zone) ou avec `entry_id`
+(l'identifiant de l'entrée, visible dans l'URL de sa page *Appareils et services*) :
+
+```yaml
+type: custom:thermostat-planner-card
+climate: climate.chambre    # ou entry_id: 01JC0123456789ABCDEFGHJKMN
+```
+
+Avec un seul thermostat, ni `entry_id` ni `climate` ne sont nécessaires : les cartes existantes continuent de
+fonctionner. Avec plusieurs, une carte sans l'un ni l'autre affiche un message demandant de préciser la zone. Le
+titre par défaut est alors suivi du nom de la zone.
+
+**Mode Absent** :
+- le mode **Maison / Absent** est **commun à toutes les zones** : l'interrupteur de n'importe quelle carte, le
+  sélecteur de n'importe quelle zone ou le service `set_mode` les basculent toutes ;
+- **Absent pour cette zone uniquement** (interrupteur affiché sur la carte dès qu'il y a plusieurs zones, entité
+  *Zone absente*, service `set_zone_away`) force une seule zone en Absent, par exemple une chambre d'amis
+  inoccupée ; les autres zones suivent le mode commun ;
+- l'**entité d'absence** se règle par zone (*Configurer*) et ne force que sa zone ;
+- une zone est donc Absent si le mode commun est Absent, **ou** si son entité d'absence est dans l'état « absent »,
+  **ou** si elle est marquée *Zone absente*. Elle n'est jamais Maison quand le mode commun est Absent.
+
+Les droits de modification du planning (*Restreindre la modification du planning*) se règlent par zone.
 
 ### Couleurs par paliers
 Chaque palier accepte `min` et/ou `max` (bornes **incluses**, en °C), `color` (obligatoire, toute couleur CSS)
@@ -80,25 +114,27 @@ et liste des plages sur plusieurs colonnes sur les cartes larges.
 
 ## Fonctionnement
 - Une journée est une suite de plages qui couvre **0h → 24h** ; chaque plage dure jusqu'au début de la suivante.
-- Le mode effectif est **Absent** si l'interrupteur manuel est activé **ou** si l'entité choisie est dans l'état « absent ».
+- Le mode effectif d'une zone est **Absent** si l'interrupteur manuel (commun à toutes les zones) est activé, **ou** si l'entité choisie pour la zone est dans l'état « absent », **ou** si la zone est marquée *Zone absente*.
 - La consigne est envoyée au thermostat **uniquement quand elle change** (début de plage, changement de mode, modification du planning). Un réglage manuel sur le thermostat reste donc en place jusqu'à la prochaine plage.
-- La consigne est envoyée **une fois par plage**, et la plage appliquée est mémorisée (`.storage/thermostat_planner.applied`). Après un redémarrage de Home Assistant ou une coupure du thermostat :
+- La consigne est envoyée **une fois par plage**, et la plage appliquée est mémorisée (`.storage/thermostat_planner.<entry_id>.applied`). Après un redémarrage de Home Assistant ou une coupure du thermostat :
   - si on est toujours dans la même plage, rien n'est renvoyé : un réglage manuel est conservé ;
   - si une nouvelle plage a commencé entre-temps, ou si l'envoi avait échoué, la consigne est envoyée **dès que le thermostat redevient disponible**.
-- Une **dérogation** en cours prime sur le planning (voir *Réglage immédiat*). Elle est enregistrée dans `.storage/thermostat_planner.override`.
+- Une **dérogation** en cours prime sur le planning (voir *Réglage immédiat*). Elle est enregistrée dans `.storage/thermostat_planner.<entry_id>.override`.
 - Des plages consécutives à la même température comptent comme une seule (ex. 23:00 → 00:00 à 18 °C : pas de renvoi à minuit).
-- Le planning est enregistré dans `.storage/thermostat_planner.data`.
+- Le planning est enregistré dans `.storage/thermostat_planner.<entry_id>.data` (un fichier par zone) ; le mode commun dans `.storage/thermostat_planner.global`.
+- **Mise à jour depuis la v0.4 ou avant** : les anciens fichiers `.storage/thermostat_planner.data`, `.applied` et `.override` sont repris une seule fois par le thermostat déjà configuré, puis supprimés une fois la copie relue et vérifiée. Si l'écriture échoue, ils sont conservés et utilisés tels quels, et la reprise est retentée au démarrage suivant. Le planning, le mode, la dérogation en cours et les `entity_id` existants sont conservés.
 
 ## Entités et services
-Toutes les entités sont rattachées à l'appareil **Thermostat Planner** et utilisables dans les automatisations, les assistants vocaux et l'historique. Les `entity_id` indiqués sont ceux créés par défaut (Home Assistant les dérive des noms anglais) ; tu peux les renommer.
+Les entités de chaque zone sont rattachées à l'appareil de la zone (nommé **Thermostat Planner** pour un thermostat configuré avant le multi-thermostat, sinon d'après la zone) et utilisables dans les automatisations, les assistants vocaux et l'historique. Les `entity_id` indiqués sont ceux créés par défaut pour le premier thermostat (Home Assistant les dérive du nom de l'appareil et des noms des entités) ; pour une autre zone, `thermostat_planner` est remplacé par le nom de la zone (ex. `select.chambre_manual_mode`). Tu peux les renommer.
 
 | Entité | Rôle |
 |---|---|
-| `select.thermostat_planner_manual_mode` | Mode manuel *Maison* / *Absent* (`home` / `away`), comme le bouton de la carte ou le service `set_mode`. Attributs : `effective_mode` (mode réellement appliqué, `away` si l'entité d'absence le force), `forced_by_entity`. |
+| `select.thermostat_planner_manual_mode` | Mode manuel *Maison* / *Absent* (`home` / `away`), **commun à toutes les zones**, comme le bouton de la carte ou le service `set_mode`. Attributs : `effective_mode` (mode réellement appliqué à la zone, `away` si l'entité d'absence ou *Zone absente* le force), `forced_by_entity`, `zone_away`. |
+| `switch.thermostat_planner_zone_away` | *Zone absente* : force cette seule zone en Absent. Ouvert à tous, comme le mode. |
 | `switch.thermostat_planner_scheduling` | Programmation activée ou en pause. Avec l'option *Restreindre la modification du planning*, seuls les administrateurs et les utilisateurs autorisés peuvent la changer depuis l'interface ; les automatisations le peuvent toujours. |
 | `sensor.thermostat_planner_planned_setpoint` | Consigne prévue maintenant (°C) : celle de la dérogation en cours, sinon celle du planning (même programmation en pause). Attributs : `source` (`override` / `schedule`), `mode`, `enabled`. |
 | `sensor.thermostat_planner_next_change` | Horodatage du prochain **changement de consigne** (les plages consécutives à la même température sont fusionnées) ; pendant une dérogation, sa fin. Inconnu si aucun changement n'est prévu (programmation en pause, consigne unique toute la semaine). Attributs : `next_temperature`, `source`. |
-| `sensor.thermostat_planner_mode` | Mode effectif `home` ou `away`. Attributs : `manual_mode`, `forced_by_entity`, `target_temperature` (consigne prévue par le planning), `next_change`, `override_temperature`, `override_until`, `enabled`. |
+| `sensor.thermostat_planner_mode` | Mode effectif `home` ou `away`. Attributs : `manual_mode`, `forced_by_entity`, `zone_away`, `target_temperature` (consigne prévue par le planning), `next_change`, `override_temperature`, `override_until`, `enabled`. |
 
 Exemple : préchauffer la salle de bain 30 min avant chaque changement.
 ```yaml
@@ -109,12 +145,23 @@ triggers:
       offset: "-00:30:00"
 ```
 
-- Service `thermostat_planner.set_mode` (`mode: home | away`) pour tes automatisations.
+- Service `thermostat_planner.set_mode` (`mode: home | away`) pour tes automatisations : mode commun, appliqué à toutes les zones.
+- Service `thermostat_planner.set_zone_away` (`away: true | false`) : force une zone en Absent, ou la rend au mode commun.
 - Service `thermostat_planner.set_override` (`temperature`, `duration` facultative, ex. `"02:00:00"`) : dérogation jusqu'à la prochaine plage ou pendant la durée donnée.
 - Service `thermostat_planner.clear_override` : reprend le planning.
 
+Chaque service accepte `climate` ou `entry_id` pour choisir la zone. Avec un seul thermostat, ils sont facultatifs ;
+avec plusieurs, ils sont obligatoires, sauf pour `set_mode` qui agit sur toutes les zones :
+
+```yaml
+action: thermostat_planner.set_override
+data:
+  climate: climate.chambre
+  temperature: 21
+  duration: "01:00:00"
+```
+
 ## Limites de cette première version
-- Un seul thermostat.
 - Pas de gestion des jours fériés ni de planning été/hiver.
 - Température au pas de 0,5 °C, de 5 à 35 °C.
 - Le thermostat doit accepter `climate.set_temperature` avec une consigne unique.
@@ -122,4 +169,5 @@ triggers:
 ## Développement
 ```bash
 python3 tests/test_schedule.py      # logique de planning
+node tests/test_card.js             # fonctions pures de la carte
 ```

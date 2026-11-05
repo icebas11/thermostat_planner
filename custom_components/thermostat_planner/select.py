@@ -13,14 +13,16 @@ from .entity import PlannerEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([PlannerModeSelect(hass.data[DOMAIN][entry.entry_id], entry)])
+    async_add_entities([PlannerModeSelect(hass.data[DOMAIN].planners[entry.entry_id], entry)])
 
 
 class PlannerModeSelect(PlannerEntity, SelectEntity):
     """Mode manuel (`data.manual_mode`), ouvert à tous comme `set_mode`.
 
-    L'entité d'absence peut forcer le mode effectif à `away` : il est exposé
-    en attribut (`effective_mode`, `forced_by_entity`).
+    Mode commun à toutes les zones : le sélecteur de chaque zone le change
+    partout. L'entité d'absence de la zone ou « Zone absente » peuvent forcer
+    le mode effectif de la zone à `away` : il est exposé en attribut
+    (`effective_mode`, `forced_by_entity`, `zone_away`).
     """
 
     _attr_icon = "mdi:home-switch-outline"
@@ -38,6 +40,7 @@ class PlannerModeSelect(PlannerEntity, SelectEntity):
         return {
             "effective_mode": self._planner.effective_mode,
             "forced_by_entity": self._planner.forced_by_entity,
+            "zone_away": self._planner.zone_away,
         }
 
     async def async_select_option(self, option: str) -> None:

@@ -1,4 +1,4 @@
-/* Thermostat Planner card — v0.4.0
+/* Thermostat Planner card — v0.5.0b1
  * Carte Lovelace sans dépendance : planning par plages horaires,
  * modes Maison / Absent, 3 modes de programmation des jours.
  */
@@ -57,6 +57,11 @@
       unavailable: "Thermostat indisponible",
       off: "Planification en pause",
       readOnly: "Lecture seule : la modification du planning est réservée à certains utilisateurs.",
+      allZones: "S'applique à toutes les zones",
+      zoneAway: "Absent pour cette zone uniquement",
+      zoneAwayHint: "Les autres zones suivent le mode commun",
+      ambiguous: "Plusieurs thermostats sont configurés : ajoute entry_id ou climate dans la configuration de la carte.",
+      notFound: "Zone introuvable : vérifie entry_id ou climate dans la configuration de la carte.",
       eEmpty: "Renseigne une heure valide.",
       eOrder: "L'heure de fin doit être après l'heure de début.",
       eEraseBefore: "Le début doit rester après le début de la plage précédente.",
@@ -109,6 +114,11 @@
       unavailable: "Thermostat unavailable",
       off: "Scheduling paused",
       readOnly: "Read-only: schedule editing is restricted to some users.",
+      allZones: "Applies to every zone",
+      zoneAway: "Away for this zone only",
+      zoneAwayHint: "Other zones follow the shared mode",
+      ambiguous: "Several thermostats are configured: add entry_id or climate to the card configuration.",
+      notFound: "Zone not found: check entry_id or climate in the card configuration.",
       eEmpty: "Enter a valid time.",
       eOrder: "End time must be after start time.",
       eEraseBefore: "Start must stay after the previous block's start.",
@@ -301,6 +311,32 @@
     };
   }
 
+  /** Zone visée d'après la config de la carte : { entry_id } et/ou { climate }, ou {} (zone unique). */
+  function targetOf(config) {
+    const out = {};
+    ["entry_id", "climate"].forEach((k) => {
+      const v = config && config[k];
+      if (v === undefined || v === null || v === "") return;
+      if (typeof v !== "string") throw new Error(`thermostat-planner-card: ${k} doit être une chaîne`);
+      out[k] = v.trim();
+    });
+    if (out.climate && !out.climate.startsWith("climate."))
+      throw new Error("thermostat-planner-card: climate doit être une entité climate.xxx");
+    return out;
+  }
+
+  /** Message WebSocket complété par la zone visée. */
+  const withTarget = (msg, target) => ({ ...msg, ...(target || {}) });
+
+  /** Titre par défaut : suivi du nom de la zone dès qu'il y a plusieurs zones. */
+  function defaultTitle(base, state) {
+    return state && state.zone_count > 1 && state.zone_name ? `${base} · ${state.zone_name}` : base;
+  }
+
+  /** Clé de traduction d'une erreur d'abonnement (null : message générique « non chargé »). */
+  const subscribeErrorKey = (err) =>
+    err && err.code === "ambiguous" ? "ambiguous" : err && err.code === "not_found" ? "notFound" : null;
+
   const esc = (s) =>
     String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -462,8 +498,26 @@
 
     setConfig(config) {
       this._scale = parseScale(config && config.colors);
+      const target = targetOf(config);
+      const changed = this._target !== undefined && JSON.stringify(target) !== JSON.stringify(this._target);
+      this._target = target;
       this._config = { ...config };
+      if (changed) {
+        // Autre zone (éditeur de carte) : nouvel abonnement.
+        if (this._unsub) {
+          this._unsub();
+          this._unsub = null;
+        }
+        this._state = null;
+        this._loadError = false;
+        if (this._hass && !this._subscribing) this._subscribe();
+      }
       this._render();
+    }
+
+    /** Appel WebSocket vers la zone de la carte. */
+    _ws(msg) {
+      return this._hass.callWS(withTarget(msg, this._target));
     }
 
     getCardSize() {
@@ -520,12 +574,13 @@
     async _subscribe() {
       this._subscribing = true;
       try {
-        this._unsub = await this._hass.connection.subscribeMessage((ev) => this._onState(ev), {
-          type: "thermostat_planner/subscribe",
-        });
+        this._unsub = await this._hass.connection.subscribeMessage(
+          (ev) => this._onState(ev),
+          withTarget({ type: "thermostat_planner/subscribe" }, this._target)
+        );
         this._loadError = false;
       } catch (err) {
-        this._loadError = true;
+        this._loadError = subscribeErrorKey(err) || true;
         this._render();
       } finally {
         this._subscribing = false;
@@ -559,7 +614,7 @@
       this._pending = false;
       this._flushing = true;
       try {
-        await this._hass.callWS({ type: "thermostat_planner/save", data: this._state.data });
+        await this._ws({ type: "thermostat_planner/save", data: this._state.data });
         this._status = "saved";
         this._error = "";
       } catch (err) {
@@ -714,11 +769,11 @@
       try {
         if (s.override && value === s.target) {
           // Retour à la consigne prévue : c'est une reprise du planning.
-          await this._hass.callWS({ type: "thermostat_planner/clear_override" });
+          await this._ws({ type: "thermostat_planner/clear_override" });
         } else {
           const msg = { type: "thermostat_planner/set_override", temperature: value };
           if (duration > 0) msg.duration = Math.round(duration);
-          await this._hass.callWS(msg);
+          await this._ws(msg);
         }
       } catch (err) {
         this._status = "error";
@@ -850,10 +905,10 @@
         return;
       }
       const t = this.t;
-      const title = (this._config && this._config.title) || t.title;
+      const title = (this._config && this._config.title) || defaultTitle(t.title, this._state);
       let body;
       if (this._loadError && !this._state) {
-        body = `<div class="msg">${esc(t.notLoaded)}</div>`;
+        body = `<div class="msg">${esc(t[this._loadError] || t.notLoaded)}</div>`;
       } else if (!this._state) {
         body = `<div class="msg">${esc(t.connecting)}</div>`;
       } else {
@@ -862,13 +917,21 @@
         const ro = this._canEdit() ? "" : "disabled";
         const tab = (name) =>
           `<button class="tab ${this._profile === name ? "on" : ""}" data-action="tab" data-profile="${name}">${esc(t[name])}${s.effective_mode === name ? `<span class="dot" title="${esc(t.activeBadge)}"></span>` : ""}</button>`;
-        const forced = s.forced_by_entity
-          ? `<div class="hint">${esc(t.forcedBy)} ${esc(s.away_entity)}</div>`
-          : "";
+        const multi = s.zone_count > 1;
+        const forced =
+          (multi ? `<div class="hint">${esc(t.allZones)}</div>` : "") +
+          (s.forced_by_entity ? `<div class="hint">${esc(t.forcedBy)} ${esc(s.away_entity)}</div>` : "");
+        // « Zone absente » : utile seulement avec plusieurs zones (ou pour la désactiver).
+        const zoneAway =
+          s.zone_away !== undefined && (multi || s.zone_away)
+            ? `<div class="row"><div><div class="label">${esc(t.zoneAway)}</div><div class="hint">${esc(t.zoneAwayHint)}</div></div>
+            <label class="switch"><input type="checkbox" data-action="zone-away-switch" ${s.zone_away ? "checked" : ""}><span></span></label></div>`
+            : "";
         body = `
           <div class="tabs" role="tablist">${tab("home")}${tab("away")}</div>
           <div class="row"><div><div class="label">${esc(t.manualAway)}</div>${forced}</div>
             <label class="switch"><input type="checkbox" data-action="away-switch" ${s.data.manual_mode === "away" ? "checked" : ""}><span></span></label></div>
+          ${zoneAway}
           <div class="row"><div class="label">${esc(t.layout)}</div>
             <select data-action="layout" ${ro}>
               ${["all", "weekday_weekend", "daily"].map((l) => `<option value="${l}" ${profile.layout === l ? "selected" : ""}>${esc(t["layout_" + l])}</option>`).join("")}
@@ -921,8 +984,14 @@
       } else if (action === "away-switch") {
         const mode = el.checked ? "away" : "home";
         this._state.data.manual_mode = mode;
-        this._hass.callWS({ type: "thermostat_planner/set_mode", mode }).catch(() => {
+        this._ws({ type: "thermostat_planner/set_mode", mode }).catch(() => {
           this._status = "error";
+          this._updateSaveStatus();
+        });
+      } else if (action === "zone-away-switch") {
+        this._ws({ type: "thermostat_planner/set_zone_away", away: el.checked }).catch((err) => {
+          this._status = "error";
+          this._error = (err && err.message) || "";
           this._updateSaveStatus();
         });
       }
@@ -941,7 +1010,7 @@
       } else if (a === "ovr-clear") {
         clearTimeout(this._ovrTimer);
         this._ovrValue = null;
-        this._hass.callWS({ type: "thermostat_planner/clear_override" }).catch((err) => {
+        this._ws({ type: "thermostat_planner/clear_override" }).catch((err) => {
           this._status = "error";
           this._error = (err && err.message) || "";
           this._updateSaveStatus();
@@ -1027,7 +1096,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, targetOf, withTarget, defaultTitle, subscribeErrorKey };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);
