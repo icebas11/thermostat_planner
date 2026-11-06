@@ -1,4 +1,4 @@
-/* Thermostat Planner card — v0.5.0
+/* Thermostat Planner card — v0.5.1b1
  * Carte Lovelace sans dépendance : planning par plages horaires,
  * modes Maison / Absent, 3 modes de programmation des jours.
  */
