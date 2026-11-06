@@ -1493,11 +1493,16 @@
             <label class="switch"><input type="checkbox" data-action="zone-away-switch" aria-labelledby="zone-away-label" ${s.zone_away ? "checked" : ""}><span></span></label></div>`
             : "";
         const selKey = this._selKey(this._profile);
-        body = `
-          <div class="row"><div><div class="label" id="away-label">${esc(t.manualAway)}</div>${forced}</div>
+        // Contrôles du mode Absent : seulement dans l'onglet « Planning Absent ».
+        const awayControls =
+          this._profile === "away"
+            ? `<div class="row"><div><div class="label" id="away-label">${esc(t.manualAway)}</div>${forced}</div>
             <label class="switch"><input type="checkbox" data-action="away-switch" aria-labelledby="away-label" ${s.data.manual_mode === "away" ? "checked" : ""}><span></span></label></div>
-          ${zoneAway}
+          ${zoneAway}`
+            : "";
+        body = `
           <div class="tabs" role="tablist">${tab("home")}${tab("away")}</div>
+          ${awayControls}
           ${editable ? "" : `<div class="ro-note"><ha-icon icon="mdi:lock-outline"></ha-icon><span>${esc(t.readOnly)}</span></div>`}
           ${this._weekHtml(this._profile, selKey)}
           ${selKey ? this._editorHtml(this._profile, selKey) : `<div class="pick">${esc(editable ? t.pickDay : t.pickDayRo)}</div>`}

@@ -61,7 +61,8 @@ colors:                     # facultatif : couleur des plages par paliers de tem
   le mode effectif, la température de la pièce et le prochain changement, par exemple « 20:30 → 20,5° ».
   Pendant une dérogation, un bandeau indique sa fin et le temps restant (« Dérogation jusqu'à 20:30 · encore 1 h 50 »)
   avec **Reprendre le planning**.
-- **Passer en mode Absent** : l'interrupteur du mode commun (voir « Plusieurs thermostats »).
+- **Passer en mode Absent** : l'interrupteur du mode commun (voir « Plusieurs thermostats »), affiché seulement
+  dans l'onglet **Planning Absent**.
 - **Planning Maison / Planning Absent** : choisit le planning affiché (et non le mode) ; le badge « actif » marque
   celui qui s'applique.
 - **Grille de la semaine** : une ligne par planning du mode de programmation choisi : une seule ligne
