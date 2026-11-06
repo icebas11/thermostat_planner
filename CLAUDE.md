@@ -30,6 +30,8 @@ Everything lives in `custom_components/thermostat_planner/`.
   - `switch.py` — `scheduling` (`data.enabled`), writes through `Planner.async_set_enabled` → `_async_apply`. Checks `can_edit` on the calling user (`self._context.user_id`); calls without a user (automations) are allowed. `zone_away` (`data.zone_away`), open to all.
   - Pure logic for these lives in `schedule.py`: `next_block`, `planned`.
 - **`www/thermostat-planner-card.js`** — vanilla custom element (shadow DOM, full `innerHTML` re-render, event delegation through `data-action` attributes). It subscribes to `thermostat_planner/subscribe` and saves the **whole** `data` object (debounced) via `thermostat_planner/save`. Card config `entry_id` / `climate` (`targetOf`) is added to every command (`withTarget`); without it the card targets the only zone. The "Away for this zone only" row shows only with the card option `show_zone_away: true` (default hidden, user's choice); without it, an active `zone_away` is just mentioned as a hint (`zoneAwayDisplay`).
+  - Layout (v0.6): compact header (big setpoint, − / + with thermostat limits, live line with "20:30 → 20,5°", override banner with countdown `fmtDuration`; values refreshed in place by `_updateCtrl` / `_updateLive`, plus a 30 s clock), common Away switch, "Planning Maison / Absent" tabs (displayed profile only), then the **week grid**: one row-button per schedule key of the layout (`gridRows`), the selected row (`selectedRow`: user choice per profile in `_sel`, `null` = closed, default today when `expand_today` is not false) is taller with labels, and its block list + modal stay the accessible editor below. "Copier vers…" copies the selected row to checked rows of both profiles (`copyTargets`, `copyTo`). "Réglages" fold at the bottom.
+  - UI state that must survive the full re-render lives on the element: `_profile`, `_sel`, `_copyOpen`, `_copySel`, `_settingsOpen`, `_modal`. Focus is restored after each render (`focusSelector` on the active element's `data-*`, or `_returnFocus`); checkbox changes in the copy panel update in place without re-render.
 
 ### Zones and Away mode
 
@@ -49,7 +51,7 @@ Permissions are per entry (zone). `thermostat_planner/save` (schedule, layout, e
 
 ## Roadmap (proposed, not implemented yet)
 
-Ideas agreed with the user to implement later, in suggested order. Already done: native entities (select / switch / sensors); on-card setpoint control (− / +) and temporary override (v0.3.0); JS tests for the card helpers and thermostat limits in the block temperature picker; multiple thermostats / zones (common Home / Away mode + per-zone "Zone away", chosen by the user over strictly global or strictly per-zone).
+Ideas agreed with the user to implement later, in suggested order. Already done: native entities (select / switch / sensors); on-card setpoint control (− / +) and temporary override (v0.3.0); week grid with copy to several days (v0.6); JS tests for the card helpers and thermostat limits in the block temperature picker; multiple thermostats / zones (common Home / Away mode + per-zone "Zone away", chosen by the user over strictly global or strictly per-zone).
 
 1. **Public holidays** — optional `binary_sensor` from the core **Workday** integration: a non-working day uses the weekend schedule (or Sunday in `daily` layout). Configured in the config/options flow (per zone).
 2. **Drag to edit on the bar** — drag block boundaries directly on the colored bar (snap to 15 min), tap a block to edit. Keep the modal as fallback (accessibility, precision); watch for scroll conflicts on touch.
@@ -58,7 +60,6 @@ Ideas agreed with the user to implement later, in suggested order. Already done:
 5. **Pre-heating (anticipation)** — reach the target *at* the block start by learning heating speed from `current_temperature` history. Most complex item; a simple first step is a configurable fixed advance ("start 30 min earlier").
 6. **Small high-value improvements**:
    - undo / redo after an edit or paste (every change is saved immediately);
-   - copy one day to several days at once (checkboxes Mon–Sun);
    - visual card editor (`getConfigElement`) for `title`, `expand_today`, `show_controls`, `override_duration`, `colors`;
    - overlay the actual room temperature curve (history) on today's bar;
 

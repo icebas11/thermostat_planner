@@ -6,7 +6,8 @@ plages horaires colorées par température, modes **Maison** / **Absent**, et tr
 - **Carte + intégration** : la consigne est envoyée au thermostat **côté serveur**, même dashboard fermé.
 - **Deux profils** (Maison, Absent), chacun avec son propre planning.
 - **Programmation des jours** : tous les jours · semaine + week-end · chaque jour indépendamment.
-- **Plages** : ajouter, modifier (début, fin, température), supprimer, copier/coller un jour.
+- **Semaine en un coup d'œil** : une grille avec une ligne par jour (ou par groupe de jours) ; touche un jour pour voir et modifier ses plages.
+- **Plages** : ajouter, modifier (début, fin, température), supprimer, copier un jour vers plusieurs autres (des deux plannings).
 - **Réglage immédiat** : boutons − / + sur la carte pour déroger au planning jusqu'à la prochaine plage.
 - **Passage en Absent** : manuel (interrupteur sur la carte) et/ou automatique via une entité de ton choix.
 - **Plusieurs thermostats (zones)** : un planning par thermostat, un mode Maison / Absent commun, et la possibilité de mettre une seule zone en Absent.
@@ -42,7 +43,7 @@ Copie `custom_components/thermostat_planner/` dans `<config>/custom_components/`
 type: custom:thermostat-planner-card
 climate: climate.salon      # obligatoire avec plusieurs thermostats (ou entry_id), voir « Plusieurs thermostats »
 title: Planning chauffage   # facultatif
-expand_today: false         # facultatif : ne pas déplier le jour en cours (true par défaut)
+expand_today: false         # facultatif : ne pas sélectionner aujourd'hui à l'ouverture (true par défaut)
 show_controls: true         # facultatif : boutons − / + de réglage immédiat (true par défaut)
 show_zone_away: true        # facultatif : interrupteur « Absent pour cette zone uniquement » (masqué par défaut)
 override_duration: 120      # facultatif : durée d'une dérogation en minutes (par défaut : jusqu'à la prochaine plage)
@@ -53,6 +54,25 @@ colors:                     # facultatif : couleur des plages par paliers de tem
     color: "#22c55e"
   - color: "#f97316"        # pas de borne = tout le reste
 ```
+
+### La carte
+- **En-tête** : la consigne actuelle en grand, avec les boutons **−** / **+** (voir « Réglage immédiat »). Dessous :
+  le mode effectif, la température de la pièce et le prochain changement, par exemple « 20:30 → 20,5° ».
+  Pendant une dérogation, un bandeau indique sa fin et le temps restant (« Dérogation jusqu'à 20:30 · encore 1 h 50 »)
+  avec **Reprendre le planning**.
+- **Passer en mode Absent** : l'interrupteur du mode commun (voir « Plusieurs thermostats »).
+- **Planning Maison / Planning Absent** : choisit le planning affiché (et non le mode) ; le badge « actif » marque
+  celui qui s'applique.
+- **Grille de la semaine** : une ligne par planning du mode de programmation choisi : une seule ligne
+  (*Tous les jours*), deux (*Semaine + week-end*) ou sept (*Chaque jour*). La couleur suit la température, un trait
+  marque l'heure actuelle sur la ligne d'aujourd'hui. Toucher une ligne la sélectionne, l'agrandit avec ses
+  températures et affiche dessous la **liste de ses plages** (touche une plage pour la modifier) ; toucher à nouveau
+  la ligne la referme. Par défaut, aujourd'hui est sélectionné à l'ouverture (`expand_today: false` pour ne rien
+  sélectionner).
+- **Copier vers…** : copie les plages du jour sélectionné vers les jours cochés, dans le même planning ou dans
+  l'autre (par exemple *Vendredi* vers *Lundi*, *Mardi* et *Jeudi*, ou vers le planning Absent).
+- **Réglages** (replié) : mode de programmation des jours et pause de la planification.
+- En **lecture seule**, la carte l'indique au-dessus de la grille : on peut consulter les jours, sans modifier.
 
 ### Plusieurs thermostats (zones)
 Chaque thermostat est une **entrée** de l'intégration, avec son propre planning, ses dérogations et ses entités.
@@ -106,13 +126,13 @@ Il s'agit d'une **dérogation** :
   la consigne prévue fait de même.
 
 Sans dérogation, si la consigne du thermostat diffère du planning (réglage fait directement sur l'appareil),
-la carte affiche « Planning 18° » sous les boutons. L'icône de flamme indique si le thermostat chauffe (`hvac_action`).
+la carte affiche « Planning 18° » sous la consigne. L'icône de flamme indique si le thermostat chauffe (`hvac_action`).
 
 ### Largeur
 Dans la vue **Sections**, la carte prend par défaut toute la largeur de la section, même si elle s'étend sur plusieurs colonnes (minimum 6 colonnes) ;
 la taille reste modifiable dans l'onglet *Disposition* de l'éditeur. Le contenu s'adapte à la largeur :
-graduations de l'axe plus fines, températures affichées dans les plages courtes quand la place le permet,
-et liste des plages sur plusieurs colonnes sur les cartes larges.
+graduations de l'axe plus fines, températures affichées dans les plages courtes de la ligne sélectionnée
+quand la place le permet, et liste des plages sur plusieurs colonnes.
 
 ## Fonctionnement
 - Une journée est une suite de plages qui couvre **0h → 24h** ; chaque plage dure jusqu'au début de la suivante.

@@ -292,4 +292,79 @@ const flat = { enabled: true, profiles: { home: { layout: "all", schedules: { al
 assert.equal(upcoming(flat, "home", null, at(6, 12, 0)), null);
 assert.equal(upcoming(mkData(), "home", { until: "n'importe quoi" }, at(6, 12, 0)), null);
 
+// ---- Grille de la semaine (gridRows / selectedRow) -------------------------------
+const { gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector } = H;
+assert.deepEqual(gridRows("all", 3).map((r) => [r.key, r.today]), [["all", true]]);
+assert.deepEqual(gridRows("all", 3)[0].days, [0, 1, 2, 3, 4, 5, 6]);
+assert.deepEqual(gridRows("weekday_weekend", 4).map((r) => [r.key, r.today]), [["weekdays", true], ["weekend", false]]);
+assert.deepEqual(gridRows("weekday_weekend", 6).map((r) => r.today), [false, true]);
+assert.deepEqual(gridRows("daily", 4).map((r) => r.key), DAYS);
+assert.deepEqual(gridRows("daily", 4).filter((r) => r.today).map((r) => r.key), ["fri"]);
+
+// Par défaut (expand_today) : la ligne d'aujourd'hui ; sans : aucune.
+assert.equal(selectedRow("daily", undefined, 4, true), "fri");
+assert.equal(selectedRow("weekday_weekend", undefined, 6, true), "weekend");
+assert.equal(selectedRow("all", undefined, 2, true), "all");
+assert.equal(selectedRow("daily", undefined, 4, false), null, "expand_today: false");
+// Choix de l'utilisateur, conservé tant qu'il existe dans le layout.
+assert.equal(selectedRow("daily", "mon", 4, true), "mon");
+assert.equal(selectedRow("daily", "mon", 4, false), "mon");
+assert.equal(selectedRow("daily", null, 4, true), null, "ligne refermée par l'utilisateur");
+// Après un changement de layout, l'ancien choix n'existe plus : retour au défaut.
+assert.equal(selectedRow("weekday_weekend", "mon", 4, true), "weekdays");
+assert.equal(selectedRow("all", "weekend", 4, false), null);
+
+// ---- Copier vers plusieurs jours (copyTargets / copyTo) ---------------------------
+const cdata = () => ({
+  enabled: true,
+  profiles: { home: profile("daily"), away: profile("all") },
+});
+assert.deepEqual(copyTargets(cdata(), { profile: "home", key: "mon" }), [
+  { profile: "home", keys: ["tue", "wed", "thu", "fri", "sat", "sun"] },
+  { profile: "away", keys: ["all"] },
+]);
+assert.deepEqual(copyTargets(cdata(), { profile: "away", key: "all" }), [
+  { profile: "home", keys: DAYS },
+], "profil à une seule ligne : rien à copier en lui-même");
+const wwData = cdata();
+wwData.profiles.away.layout = "weekday_weekend";
+assert.deepEqual(copyTargets(wwData, { profile: "away", key: "weekend" })[1], { profile: "away", keys: ["weekdays"] });
+
+const src = cdata();
+const before = JSON.stringify(src);
+const copied = copyTo(src, { profile: "home", key: "mon" }, [
+  { profile: "home", key: "tue" },
+  { profile: "home", key: "sat" },
+  { profile: "away", key: "all" },
+  { profile: "home", key: "mon" }, // la source elle-même : ignorée
+  { profile: "home", key: "nimporte" }, // clé inconnue : ignorée
+  { profile: "vacances", key: "all" }, // profil inconnu : ignoré
+]);
+assert.equal(JSON.stringify(src), before, "copyTo ne modifie pas son entrée");
+assert.deepEqual(DAYS.map((d) => copied.profiles.home.schedules[d][0].temp), [20, 20, 22, 23, 24, 20, 26]);
+assert.equal(copied.profiles.away.schedules.all[0].temp, 20);
+assert.equal(copied.profiles.home.schedules.nimporte, undefined);
+assert.equal(copied.profiles.vacances, undefined);
+copied.profiles.home.schedules.tue[0].temp = 5;
+assert.equal(copied.profiles.home.schedules.sat[0].temp, 20, "chaque destination reçoit une copie indépendante");
+assert.equal(copied.profiles.home.schedules.mon[0].temp, 20);
+assert.deepEqual(copyTo(src, { profile: "home", key: "mon" }, []), src, "aucune destination : données identiques");
+
+// ---- Compte à rebours de la dérogation ------------------------------------------
+assert.equal(fmtDuration(110, "fr"), "1 h 50");
+assert.equal(fmtDuration(65, "fr"), "1 h 05");
+assert.equal(fmtDuration(110, "en"), "1 h 50 min");
+assert.equal(fmtDuration(120, "fr"), "2 h");
+assert.equal(fmtDuration(45, "fr"), "45 min");
+assert.equal(fmtDuration(44.2, "fr"), "45 min", "minute entamée comptée");
+assert.equal(fmtDuration(0, "fr"), "0 min");
+assert.equal(fmtDuration(-3, "en"), "0 min");
+
+// ---- Focus conservé après un rendu complet --------------------------------------
+assert.equal(focusSelector({ dataset: { action: "select", key: "mon" } }), '[data-action="select"][data-key="mon"]');
+assert.equal(focusSelector({ dataset: { action: "copy-pick", target: "home:tue" } }), '[data-action="copy-pick"][data-target="home:tue"]');
+assert.equal(focusSelector({ dataset: {}, id: "layout-select" }), "#layout-select");
+assert.equal(focusSelector({ dataset: {} }), null);
+assert.equal(focusSelector(null), null);
+
 console.log("js OK");

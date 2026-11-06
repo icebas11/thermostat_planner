@@ -8,7 +8,7 @@
   const MAX_T = 35;
   const STEP = 0.5;
   // Actions qui modifient le planning (soumises au droit de modification).
-  const EDIT_ACTIONS = new Set(["layout", "enabled-switch", "paste", "edit", "add", "modal-remove", "modal-save"]);
+  const EDIT_ACTIONS = new Set(["layout", "enabled-switch", "copy-apply", "edit", "add", "modal-remove", "modal-save"]);
 
   const I18N = {
     fr: {
@@ -19,6 +19,7 @@
       tabAway: "Planning Absent",
       settings: "Réglages",
       activeBadge: "Mode actif",
+      activeShort: "actif",
       manualAway: "Passer en mode Absent",
       forcedBy: "Forcé Absent par",
       enabled: "Planification active",
@@ -30,6 +31,15 @@
       weekend: "Samedi – Dimanche",
       all: "Tous les jours",
       days: { mon: "Lundi", tue: "Mardi", wed: "Mercredi", thu: "Jeudi", fri: "Vendredi", sat: "Samedi", sun: "Dimanche" },
+      short: { mon: "Lun", tue: "Mar", wed: "Mer", thu: "Jeu", fri: "Ven", sat: "Sam", sun: "Dim", all: "L–D", weekdays: "L–V", weekend: "S–D" },
+      today: "aujourd'hui",
+      weekAria: "Jours du planning",
+      pickDay: "Touche un jour pour voir et modifier ses plages.",
+      pickDayRo: "Touche un jour pour voir ses plages.",
+      copyTo: "Copier vers…",
+      copyFrom: "Copier {day} vers :",
+      copyApply: "Copier",
+      remaining: "encore {d}",
       addBlock: "Ajouter une plage",
       editBlock: "Modifier la plage",
       newBlock: "Nouvelle plage",
@@ -39,8 +49,6 @@
       save: "Enregistrer",
       cancel: "Annuler",
       remove: "Supprimer",
-      copy: "Copier ce jour",
-      paste: "Coller",
       saving: "Enregistrement…",
       saved: "Enregistré",
       copied: "Copié",
@@ -81,6 +89,7 @@
       tabAway: "Away schedule",
       settings: "Settings",
       activeBadge: "Active mode",
+      activeShort: "active",
       manualAway: "Switch to Away mode",
       forcedBy: "Forced Away by",
       enabled: "Scheduling enabled",
@@ -92,6 +101,15 @@
       weekend: "Saturday – Sunday",
       all: "Every day",
       days: { mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday", sun: "Sunday" },
+      short: { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun", all: "Mon–Sun", weekdays: "Mon–Fri", weekend: "Sat–Sun" },
+      today: "today",
+      weekAria: "Schedule days",
+      pickDay: "Tap a day to see and edit its time blocks.",
+      pickDayRo: "Tap a day to see its time blocks.",
+      copyTo: "Copy to…",
+      copyFrom: "Copy {day} to:",
+      copyApply: "Copy",
+      remaining: "{d} left",
       addBlock: "Add a time block",
       editBlock: "Edit time block",
       newBlock: "New time block",
@@ -101,8 +119,6 @@
       save: "Save",
       cancel: "Cancel",
       remove: "Delete",
-      copy: "Copy this day",
-      paste: "Paste",
       saving: "Saving…",
       saved: "Saved",
       copied: "Copied",
@@ -429,6 +445,77 @@
   const esc = (s) =>
     String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  // Toutes les clés de planning stockées (schedule.SCHEDULE_KEYS côté serveur).
+  const ALL_KEYS = new Set(["all", "weekdays", "weekend", ...DAYS]);
+
+  /**
+   * Lignes de la grille de la semaine pour un layout : [{ key, days, today }].
+   * `all` : une ligne ; `weekday_weekend` : semaine et week-end ; `daily` : les sept jours.
+   */
+  function gridRows(layout, weekday) {
+    if (layout === "all") return [{ key: "all", days: [0, 1, 2, 3, 4, 5, 6], today: true }];
+    if (layout === "weekday_weekend")
+      return [
+        { key: "weekdays", days: [0, 1, 2, 3, 4], today: weekday < 5 },
+        { key: "weekend", days: [5, 6], today: weekday >= 5 },
+      ];
+    return DAYS.map((d, i) => ({ key: d, days: [i], today: i === weekday }));
+  }
+
+  /**
+   * Ligne sélectionnée dans la grille : le choix de l'utilisateur s'il existe dans ce layout
+   * (null : aucune, l'utilisateur a refermé), sinon la ligne d'aujourd'hui si `expand`
+   * (option expand_today), sinon aucune.
+   */
+  function selectedRow(layout, choice, weekday, expand) {
+    if (choice === null) return null;
+    if (choice !== undefined && gridRows(layout, weekday).some((r) => r.key === choice)) return choice;
+    return expand ? keyFor(layout, weekday) : null;
+  }
+
+  /** Destinations proposées pour copier la ligne `src` ({ profile, key }) : lignes de chaque profil, sauf la source. */
+  function copyTargets(data, src) {
+    return ["home", "away"]
+      .filter((profile) => data.profiles[profile])
+      .map((profile) => ({
+        profile,
+        keys: gridRows(data.profiles[profile].layout, 0)
+          .map((r) => r.key)
+          .filter((k) => !(profile === src.profile && k === src.key)),
+      }))
+      .filter((g) => g.keys.length);
+  }
+
+  /** Copie le planning de `src` vers chaque destination [{ profile, key }] ; renvoie de nouvelles données. */
+  function copyTo(data, src, targets) {
+    const out = clone(data);
+    const segs = data.profiles[src.profile].schedules[src.key];
+    targets.forEach(({ profile, key }) => {
+      if ((profile === src.profile && key === src.key) || !ALL_KEYS.has(key) || !out.profiles[profile]) return;
+      out.profiles[profile].schedules[key] = clone(segs);
+    });
+    return out;
+  }
+
+  /** Durée en minutes → « 1 h 50 », « 45 min », « 2 h » (en : « 1 h 50 min »). Arrondi à la minute supérieure. */
+  function fmtDuration(minutes, lang) {
+    const m = Math.max(0, Math.ceil(minutes - 1e-9));
+    if (m < 60) return `${m} min`;
+    const h = Math.floor(m / 60);
+    const r = m % 60;
+    if (!r) return `${h} h`;
+    return lang === "fr" ? `${h} h ${String(r).padStart(2, "0")}` : `${h} h ${r} min`;
+  }
+
+  /** Sélecteur CSS qui retrouve un élément `data-action` après un nouveau rendu (pour lui rendre le focus). */
+  function focusSelector(el) {
+    if (!el || !el.dataset || !el.dataset.action) return el && el.id ? `#${el.id}` : null;
+    return ["action", "key", "profile", "target", "dir", "index"]
+      .filter((k) => el.dataset[k] !== undefined)
+      .map((k) => `[data-${k}="${String(el.dataset[k]).replace(/["\\]/g, "\\$&")}"]`)
+      .join("");
+  }
+
   // ---- Styles -----------------------------------------------------------
   const STYLE = `
     :host { display: block; }
@@ -438,109 +525,137 @@
     button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible {
       outline: 2px solid var(--primary-color); outline-offset: 2px;
     }
-    .head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
-    .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .title { font-size: 1.25rem; font-weight: 500; color: var(--primary-text-color); }
-    .hvac { flex: none; display: flex; color: var(--disabled-text-color, #8a8a8a); }
-    .hvac.on { color: var(--state-climate-heat-color, #ff8100); }
-    .live { font-size: .875rem; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
-    .live b { color: var(--primary-text-color); font-weight: 500; }
-    .next { white-space: nowrap; }
     .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
       clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
-    .ctrl { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 8px; }
-    .pill { height: 52px; border: 0; border-radius: 999px; background: var(--secondary-background-color);
-      display: flex; align-items: center; justify-content: center; }
-    button.pill { font-size: 1.625rem; line-height: 1; color: var(--primary-text-color); }
-    button.pill[disabled] { opacity: .45; cursor: default; }
-    .setpoint { font-size: 1.125rem; font-weight: 500; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
-    .ctrl-info { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; column-gap: 8px;
-      min-height: 2.25rem; margin-bottom: 8px; font-size: .8125rem; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
-    .ctrl-info .link { padding: 6px 4px; }
-
-    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px;
-      background: var(--secondary-background-color); border-radius: 999px; margin-bottom: 12px; }
-    .tab { border: 0; background: transparent; padding: 10px 12px; border-radius: 999px;
-      display: flex; align-items: center; justify-content: center; gap: 8px;
-      color: var(--secondary-text-color); font-weight: 500; }
-    .tab.on { background: var(--card-background-color, #fff); color: var(--primary-text-color);
-      box-shadow: 0 1px 3px rgba(0,0,0,.28); }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary-color); }
+    /* En-tête « coup d'œil » : consigne en grand, ± à droite. */
+    .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 24px; }
+    .title { font-size: 1.0625rem; font-weight: 500; color: var(--primary-text-color); }
+    .hvac { flex: none; display: flex; color: var(--disabled-text-color, #8a8a8a); }
+    .hvac.on { color: var(--state-climate-heat-color, #ff8100); }
+    .hero { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
+    .hero-main { flex: 1; min-width: 0; }
+    .big { display: block; font-size: 3.25rem; line-height: 1.05; font-weight: 300; letter-spacing: -.03em;
+      color: var(--primary-text-color); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .big small { display: inline-block; vertical-align: top; margin: .32em 0 0 3px; font-size: 1.125rem;
+      font-weight: 400; letter-spacing: 0; color: var(--secondary-text-color); }
+    .live { margin-top: 4px; font-size: .875rem; line-height: 1.45; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+    .live b { color: var(--primary-text-color); font-weight: 500; }
+    .next { white-space: nowrap; }
+    .step { flex: none; display: flex; gap: 8px; }
+    .round { width: 48px; height: 48px; border: 0; border-radius: 50%; background: var(--secondary-background-color);
+      color: var(--primary-text-color); font-size: 1.625rem; line-height: 1; display: flex; align-items: center; justify-content: center; }
+    .round[disabled] { opacity: .45; cursor: default; }
+    .ovr { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px;
+      padding: 4px 4px 4px 12px; min-height: 52px; border-radius: 12px; font-size: .875rem; color: var(--primary-text-color);
+      background: color-mix(in srgb, var(--accent-color, #ff9800) 18%, var(--card-background-color, #fff));
+      border-left: 4px solid var(--accent-color, #ff9800); font-variant-numeric: tabular-nums; }
+    .ovr b { font-weight: 600; }
+    .ovr button { flex: none; min-height: 44px; padding: 0 14px; border: 0; border-radius: 10px; font-weight: 500;
+      background: var(--card-background-color, #fff); color: var(--primary-text-color); }
+    .note { margin-top: 8px; font-size: .8125rem; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
 
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      padding: 12px 14px; background: var(--secondary-background-color); border-radius: 14px; margin-bottom: 8px; }
+      padding: 12px 14px; background: var(--secondary-background-color); border-radius: 14px; margin-top: 12px; }
+    .row + .row { margin-top: 8px; }
     .row .label { color: var(--primary-text-color); }
     .row .hint { font-size: .8125rem; color: var(--secondary-text-color); margin-top: 2px; }
     select { font: inherit; color: var(--primary-text-color); background: var(--card-background-color, #fff);
-      border: 1px solid var(--divider-color); border-radius: 10px; padding: 8px 10px; max-width: 55%; }
+      border: 1px solid var(--divider-color); border-radius: 10px; padding: 8px 10px; max-width: 55%; min-height: 44px; }
 
     .switch { position: relative; width: 46px; height: 28px; flex: none; }
-    .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; width: 100%; height: 100%; z-index: 1; }
+    .switch input { position: absolute; inset: -8px; opacity: 0; margin: 0; cursor: pointer; width: calc(100% + 16px); height: calc(100% + 16px); z-index: 1; }
     .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--disabled-text-color, #8a8a8a); transition: background .15s; }
     .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
       border-radius: 50%; background: #fff; transition: transform .15s; }
     .switch input:checked + span { background: var(--primary-color); }
     .switch input:checked + span::after { transform: translateX(18px); }
     .switch input:focus-visible + span { outline: 2px solid var(--primary-color); outline-offset: 2px; }
-
-    .section { background: var(--secondary-background-color); border-radius: 16px; margin-top: 12px; overflow: hidden; }
-    .sec-head { width: 100%; display: flex; align-items: center; justify-content: space-between;
-      border: 0; background: transparent; padding: 14px 16px 10px; text-align: left; }
-    .sec-name { font-size: 1.0625rem; color: var(--primary-text-color); }
-    .sec-name small { margin-left: 8px; font-size: .75rem; color: var(--primary-color); }
-    .chev { width: 10px; height: 10px; border-right: 2px solid var(--secondary-text-color);
-      border-bottom: 2px solid var(--secondary-text-color); transform: rotate(45deg); transition: transform .15s; margin-right: 4px; }
-    .section.open .chev, .settings[open] .chev { transform: rotate(-135deg); }
-
-    .settings { margin-top: 12px; border-top: 1px solid var(--divider-color); }
-    .settings summary { display: flex; align-items: center; gap: 12px; padding: 14px 4px; cursor: pointer;
-      list-style: none; border-radius: 8px; }
-    .settings summary::-webkit-details-marker { display: none; }
-    .settings .sum-hint { margin-left: auto; font-size: .8125rem; color: var(--secondary-text-color); text-align: right; }
-    .settings .row:last-child { margin-bottom: 0; }
-
-    .bar-wrap { padding: 0 16px; }
-    .bar { position: relative; display: flex; gap: 3px; height: 44px; }
-    .seg { min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;
-      background: var(--bg); color: var(--fg); font-size: .875rem; font-weight: 600;
-      font-variant-numeric: tabular-nums; border-radius: 3px; }
-    .seg:first-child { border-radius: 10px 3px 3px 10px; }
-    .seg:last-child { border-radius: 3px 10px 10px 3px; }
-    .seg:only-child { border-radius: 10px; }
-    .now { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--primary-text-color); border-radius: 1px; pointer-events: none; }
-    .axis { position: relative; height: 22px; margin-top: 6px; font-size: .75rem; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
-    .axis span { position: absolute; top: 0; transform: translateX(-50%); }
-    .axis span:first-child { transform: none; }
-    .axis span:last-child { transform: translateX(-100%); }
-
-    .blocks { display: none; padding: 6px 16px 12px; gap: 8px;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-    .section.open .blocks { display: grid; }
-    .block { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      text-align: left; border: 0; border-left: 4px solid var(--accent); background: var(--tint);
-      border-radius: 4px 14px 14px 4px; padding: 12px 14px; }
-    .block .range, .block .deg { display: block; }
-    .block .range { font-size: 1.0625rem; font-weight: 500; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
-    .block .deg { font-size: .9375rem; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
-    .block::after { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--secondary-text-color);
-      border-top: 2px solid var(--secondary-text-color); transform: rotate(45deg); flex: none; }
-    .tools { display: none; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 16px 14px;
-      border-top: 1px solid var(--divider-color); margin: 4px 16px 0; padding-left: 0; padding-right: 0; }
-    .section.open .tools { display: flex; }
-    .btn { border: 1px solid var(--divider-color); background: transparent; border-radius: 10px; padding: 8px 12px; color: var(--primary-text-color); }
-    .btn.primary { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
-    .btn.danger { color: var(--error-color, #db4437); }
-    .btn[disabled] { opacity: .45; cursor: default; }
-    .link { border: 0; background: transparent; color: var(--primary-color); font-weight: 500; padding: 8px 4px; }
-    .tool-group { display: flex; gap: 8px; }
-    div.block { cursor: default; }
-    div.block::after { display: none; }
     .switch input[disabled] { cursor: default; }
     .switch input[disabled] + span, select[disabled] { opacity: .5; }
 
-    .foot { margin-top: 12px; }
-    .status { text-align: right; font-size: .8125rem; color: var(--secondary-text-color); min-height: 1.2em; margin-top: 8px; }
+    /* Onglets : planning affiché (et non le mode). */
+    .tabs { display: flex; gap: 20px; margin-top: 16px; border-bottom: 1px solid var(--divider-color); }
+    .tab { border: 0; background: transparent; padding: 0 0 2px; min-height: 44px; margin-bottom: -1px;
+      border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      color: var(--secondary-text-color); font-weight: 500; }
+    .tab.on { color: var(--primary-text-color); border-bottom-color: var(--primary-color); }
+    .badge { font-size: .6875rem; font-weight: 500; line-height: 1.5; padding: 0 7px; border-radius: 999px;
+      border: 1px solid currentColor; color: var(--secondary-text-color); }
+
+    .ro-note { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: .8125rem; color: var(--secondary-text-color); }
+    .ro-note ha-icon { --mdc-icon-size: 18px; width: 18px; height: 18px; flex: none; }
+
+    /* Grille de la semaine : une ligne par planning du layout, la ligne choisie est agrandie. */
+    .week { margin-top: 8px; }
+    .wrow { width: 100%; display: grid; grid-template-columns: var(--lw) 1fr; align-items: center; column-gap: 8px;
+      min-height: 44px; padding: 4px 6px; border: 0; border-radius: 10px; background: transparent; text-align: left; }
+    .wrow + .wrow { margin-top: 2px; }
+    .wrow.sel { background: var(--secondary-background-color); padding-top: 6px; padding-bottom: 6px; }
+    .wlabel { font-size: .8125rem; color: var(--secondary-text-color); white-space: nowrap; }
+    .wrow.today .wlabel, .wrow.sel .wlabel { color: var(--primary-text-color); font-weight: 600; }
+    .wbar { position: relative; display: block; height: 28px; }
+    .wrow.sel .wbar { height: 48px; }
+    .wsegs { display: flex; gap: 2px; height: 100%; border-radius: 7px; overflow: hidden; }
+    .wseg { min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;
+      background: var(--bg); color: var(--fg); font-size: .8125rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .now { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; pointer-events: none;
+      background: var(--primary-text-color); box-shadow: 0 0 0 1px var(--card-background-color, #fff); }
+    .waxis { position: relative; height: 18px; margin: 2px 6px 0 calc(var(--lw) + 14px);
+      font-size: .75rem; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+    .waxis span { position: absolute; top: 0; transform: translateX(-50%); }
+    .waxis span:first-child { transform: none; }
+    .waxis span:last-child { transform: translateX(-100%); }
+    .pick { margin-top: 8px; text-align: center; font-size: .8125rem; color: var(--secondary-text-color); }
+
+    /* Éditeur du jour sélectionné. */
+    .editor { margin-top: 10px; padding: 12px; border-radius: 14px; background: var(--secondary-background-color); }
+    .ed-name { font-size: 1rem; font-weight: 500; color: var(--primary-text-color); }
+    .ed-name small { margin-left: 8px; font-size: .75rem; font-weight: 400; color: var(--secondary-text-color); }
+    .blocks { display: grid; gap: 8px; margin-top: 10px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+    .block { width: 100%; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      text-align: left; border: 0; border-left: 4px solid var(--accent); border-radius: 4px 12px 12px 4px; padding: 8px 10px 8px 12px;
+      background: linear-gradient(var(--tint), var(--tint)), var(--card-background-color, #fff); }
+    .block .range, .block .deg { display: block; }
+    .block .range { font-size: 1rem; font-weight: 500; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+    .block .deg { font-size: .9375rem; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+    button.block::after { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--secondary-text-color);
+      border-top: 2px solid var(--secondary-text-color); transform: rotate(45deg); flex: none; }
+    .tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+    .btn { min-height: 44px; border: 1px solid var(--divider-color); background: var(--card-background-color, #fff);
+      border-radius: 10px; padding: 0 14px; color: var(--primary-text-color); font-weight: 500; }
+    .btn.primary { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
+    .btn.danger { color: var(--error-color, #db4437); }
+    .btn[disabled] { opacity: .45; cursor: default; }
+
+    .copy { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--divider-color); }
+    .copy-what { font-size: .875rem; color: var(--secondary-text-color); }
+    .copy-what b { color: var(--primary-text-color); font-weight: 500; }
+    .copy-group { margin-top: 10px; }
+    .copy-prof { display: block; margin-bottom: 4px; font-size: .8125rem; color: var(--secondary-text-color); }
+    .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+    .chip { position: relative; flex: 1 1 40px; max-width: 120px; height: 44px; }
+    .chip input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+    .chip span { display: flex; align-items: center; justify-content: center; height: 100%; padding: 0 6px; pointer-events: none;
+      border: 1px solid var(--divider-color); border-radius: 10px; background: var(--card-background-color, #fff);
+      font-size: .8125rem; color: var(--primary-text-color); white-space: nowrap; }
+    .chip input:checked + span { background: var(--primary-text-color); border-color: var(--primary-text-color);
+      color: var(--card-background-color, #fff); font-weight: 600; }
+    .chip input:focus-visible + span { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+    .copy-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+    .settings { margin-top: 12px; border-top: 1px solid var(--divider-color); }
+    .settings summary { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 4px; cursor: pointer;
+      list-style: none; border-radius: 8px; }
+    .settings summary::-webkit-details-marker { display: none; }
+    .settings .sum-name { color: var(--primary-text-color); }
+    .settings .sum-hint { margin-left: auto; font-size: .8125rem; color: var(--secondary-text-color); text-align: right; }
+    .settings .row:first-of-type { margin-top: 4px; }
+    .chev { width: 10px; height: 10px; border-right: 2px solid var(--secondary-text-color); flex: none;
+      border-bottom: 2px solid var(--secondary-text-color); transform: rotate(45deg); transition: transform .15s; margin-right: 4px; }
+    .settings[open] .chev { transform: rotate(-135deg); }
+
+    .status { text-align: right; font-size: .8125rem; color: var(--secondary-text-color); min-height: 1.2em; margin-top: 4px; }
     .status.err { color: var(--error-color, #db4437); }
     .msg { padding: 12px; color: var(--secondary-text-color); }
 
@@ -554,10 +669,10 @@
     .field label { color: var(--secondary-text-color); }
     .field input[type=time], .field input[type=text] { font: inherit; color: var(--primary-text-color);
       background: var(--secondary-background-color); border: 1px solid var(--divider-color); border-radius: 10px;
-      padding: 9px 10px; width: 140px; font-variant-numeric: tabular-nums; }
+      padding: 9px 10px; width: 140px; min-height: 44px; font-variant-numeric: tabular-nums; }
     .field input[disabled] { opacity: .55; }
     .stepper { display: flex; align-items: center; gap: 8px; }
-    .stepper button { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--divider-color);
+    .stepper button { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--divider-color);
       background: var(--secondary-background-color); font-size: 1.25rem; line-height: 1; }
     .stepper input { width: 76px; text-align: center; font: inherit; font-size: 1.125rem; font-weight: 600;
       color: var(--primary-text-color); background: transparent; border: 0; border-bottom: 2px solid var(--primary-color);
@@ -575,9 +690,13 @@
       this.attachShadow({ mode: "open" });
       this._state = null;
       this._profile = "home";
-      this._open = {};
+      // État d'interface conservé d'un rendu à l'autre.
+      this._sel = {}; // ligne choisie par profil (undefined : défaut, null : refermée)
+      this._copyOpen = false;
+      this._copySel = new Set(); // destinations cochées "profil:clé"
+      this._settingsOpen = false;
+      this._returnFocus = null;
       this._modal = null;
-      this._clipboard = null;
       this._pending = false;
       this._flushing = false;
       this._status = "";
@@ -589,8 +708,10 @@
       this._ovrTimer = null;
       this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
       this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
-      // État du repli « Réglages », conservé d'un rendu à l'autre (toggle ne remonte pas : capture).
-      this._settingsOpen = false;
+      this.shadowRoot.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && this._modal) this._closeModal();
+      });
+      // Repli « Réglages » (toggle ne remonte pas : capture).
       this.shadowRoot.addEventListener(
         "toggle",
         (e) => {
@@ -629,7 +750,7 @@
     }
 
     getCardSize() {
-      return 8;
+      return 7;
     }
 
     // Vue « sections » : toute la largeur de la section (même sur 2+ colonnes), hauteur automatique.
@@ -637,12 +758,12 @@
       return { columns: "full", min_columns: 6 };
     }
 
-    /** Seuils d'affichage dépendant de la largeur réelle de la barre. */
+    /** Seuils d'affichage dépendant de la largeur réelle des barres de la grille. */
     _barMetrics() {
-      const bw = this._width ? this._width - 64 : 0; // padding ha-card + bar-wrap
+      const bw = this._width ? this._width - 92 : 0; // padding de la carte, étiquette du jour
       return {
-        labelMinPct: bw ? (44 / bw) * 100 : 9,
-        tickStep: bw >= 640 ? 2 : bw >= 340 ? 4 : 8,
+        labelMinPct: bw ? (40 / bw) * 100 : 10,
+        tickStep: bw >= 480 ? 3 : 6,
       };
     }
 
@@ -672,10 +793,14 @@
         });
       }
       if (this._ro) this._ro.observe(this);
+      // Compte à rebours de la dérogation et prochain changement.
+      clearInterval(this._clock);
+      this._clock = setInterval(() => this._updateLive(), 30000);
     }
 
     disconnectedCallback() {
       if (this._ro) this._ro.disconnect();
+      clearInterval(this._clock);
       if (this._unsub) {
         this._unsub();
         this._unsub = null;
@@ -756,14 +881,19 @@
       }
     }
 
+    /** Nom complet d'une ligne de planning (« Vendredi », « Lundi – Vendredi », « Tous les jours »). */
+    _rowName(key) {
+      const t = this.t;
+      return t.days[key] || t[key] || key;
+    }
+
+    /** Ligne d'état sous la consigne : mode, pièce, prochain changement. */
     _liveHtml() {
       const s = this._state;
       if (!s) return "";
       const t = this.t;
       if (!s.data.enabled) return esc(t.off);
       const parts = [`<b>${esc(t[s.effective_mode])}</b>`];
-      // Avec les contrôles, la consigne prévue est déjà affichée sous les boutons ±.
-      if (!this._showControls()) parts.push(`${esc(t.target)} <b>${this._fmt(s.target)}°</b>`);
       const climate = this._climate();
       const current = climate && climate.attributes.current_temperature;
       if (current !== undefined && current !== null) parts.push(`${this._fmt(Number(current))}° ${esc(t.room)}`);
@@ -783,7 +913,13 @@
 
     _updateLive() {
       const el = this.shadowRoot.getElementById("live");
-      if (el) el.innerHTML = this._liveHtml();
+      if (el) {
+        const html = this._liveHtml();
+        if (el._html !== html) {
+          el._html = html;
+          el.innerHTML = html;
+        }
+      }
       this._updateCtrl();
     }
 
@@ -826,15 +962,22 @@
       return v === undefined || v === null ? null : Number(v);
     }
 
-    _ctrlHtml() {
-      if (!this._state || !this._showControls()) return "";
+    /** En-tête : consigne en grand, ± (option show_controls), ligne d'état, bandeau de dérogation. */
+    _heroHtml(title) {
       const t = this.t;
-      return `<div class="ctrl">
-          <button class="pill" data-action="ovr-step" data-dir="-1" aria-label="${esc(t.lower)}">−</button>
-          <div class="pill setpoint" id="ctrl-val" aria-live="polite"></div>
-          <button class="pill" data-action="ovr-step" data-dir="1" aria-label="${esc(t.raise)}">+</button>
-        </div>
-        <div class="ctrl-info" id="ctrl-info"></div>`;
+      const controls = this._state && this._showControls();
+      const step = controls
+        ? `<div class="step" role="group" aria-label="${esc(t.target)}">
+            <button class="round" data-action="ovr-step" data-dir="-1" aria-label="${esc(t.lower)}">−</button>
+            <button class="round" data-action="ovr-step" data-dir="1" aria-label="${esc(t.raise)}">+</button>
+          </div>`
+        : "";
+      return `<div class="title-row"><div class="title">${esc(title)}</div><span class="hvac" id="hvac"></span></div>
+        ${this._state
+          ? `<div class="hero"><div class="hero-main"><span class="big" id="ctrl-val" aria-live="polite"></span>
+              <div class="live" id="live"></div></div>${step}</div>
+            <div id="ctrl-info"></div>`
+          : ""}`;
     }
 
     /** Met à jour les valeurs sans reconstruire les boutons (garde le focus). */
@@ -860,18 +1003,27 @@
 
       const val = root.getElementById("ctrl-val");
       if (!val || !s) return;
-      const sp = this._setpoint();
-      val.textContent = up && sp !== null ? `${this._fmt(sp)} °C` : "—";
+      const controls = this._showControls();
+      // Sans contrôles : la consigne prévue (dérogation comprise), comme le capteur « Consigne ».
+      let sp = controls ? this._setpoint() : s.target;
+      if ((sp === null || sp === undefined) && !controls) sp = this._setpoint();
+      const shown = sp !== null && sp !== undefined && !Number.isNaN(Number(sp)) && (up || !controls);
+      setHtml(val, shown ? `<span class="sr">${esc(t.target)} </span>${this._fmt(Number(sp))}<small>°C</small>` : "—");
       root.querySelectorAll('[data-action="ovr-step"]').forEach((b) => (b.disabled = !up || sp === null));
 
       let info = "";
-      if (!up) info = esc(t.unavailable);
+      if (!up) info = `<div class="note">${esc(t.unavailable)}</div>`;
       else if (s.override)
-        info = `<span>${esc(t.override)} ${esc(this._fmtTime(s.override.until))}</span>
-          <button class="link" data-action="ovr-clear">${esc(t.resume)}</button>`;
-      else if (s.data.enabled && sp !== null && sp !== s.target)
-        info = `<span>${esc(t.planned)} ${this._fmt(s.target)}°</span>`;
+        info = `<div class="ovr"><span>${esc(t.override)} <b>${esc(this._fmtTime(s.override.until))}</b><span id="ovr-left"></span></span>
+          ${controls ? `<button data-action="ovr-clear">${esc(t.resume)}</button>` : ""}</div>`;
+      else if (controls && s.data.enabled && sp !== null && sp !== s.target && s.target !== null && s.target !== undefined)
+        info = `<div class="note">${esc(t.planned)} ${this._fmt(s.target)}°</div>`;
       setHtml(root.getElementById("ctrl-info"), info);
+      const left = root.getElementById("ovr-left");
+      if (left && s.override) {
+        const ms = new Date(s.override.until).getTime() - Date.now();
+        left.textContent = ms > 0 ? ` · ${t.remaining.replace("{d}", fmtDuration(ms / 60000, this._lang))}` : "";
+      }
     }
 
     _stepOverride(dir) {
@@ -917,72 +1069,103 @@
       el.className = "status" + (this._status === "error" ? " err" : "");
     }
 
-    _sections(layout) {
-      const t = this.t;
-      const today = (new Date().getDay() + 6) % 7;
-      if (layout === "all") return [{ key: "all", label: t.all, today: true }];
-      if (layout === "weekday_weekend")
-        return [
-          { key: "weekdays", label: t.weekdays, today: today < 5 },
-          { key: "weekend", label: t.weekend, today: today >= 5 },
-        ];
-      return DAYS.map((d, i) => ({ key: d, label: t.days[d], today: i === today }));
+    _expandToday() {
+      return !this._config || this._config.expand_today !== false;
     }
 
-    _sectionHtml(profileName, sec) {
+    /** Ligne sélectionnée du profil affiché, ou null. */
+    _selKey(profileName) {
+      const layout = this._state.data.profiles[profileName].layout;
+      return selectedRow(layout, this._sel[profileName], weekdayOf(new Date()), this._expandToday());
+    }
+
+    /** Grille de la semaine du profil : une ligne-bouton par planning du layout. */
+    _weekHtml(profileName, selKey) {
       const t = this.t;
       const s = this._state;
-      const segs = s.data.profiles[profileName].schedules[sec.key];
-      const ivs = intervals(segs);
-      const id = `${profileName}:${sec.key}`;
-      const expandToday = !this._config || this._config.expand_today !== false;
-      const open = this._open[id] !== undefined ? this._open[id] : sec.today && expandToday;
-      const showNow = sec.today && profileName === s.effective_mode;
+      const profile = s.data.profiles[profileName];
+      const rows = gridRows(profile.layout, weekdayOf(new Date()));
       const nowDate = new Date();
       const nowPct = ((nowDate.getHours() * 60 + nowDate.getMinutes()) / 1440) * 100;
       const { labelMinPct, tickStep } = this._barMetrics();
-
-      const bar = ivs
-        .map((iv) => {
-          const w = ((iv.e - iv.s) / 1440) * 100;
-          const c = tempColors(iv.t, this._scale, this._dark);
-          return `<div class="seg" style="width:${w}%;--bg:${c.bg};--fg:${c.fg}">${w >= labelMinPct ? this._fmt(iv.t) + "°" : ""}</div>`;
+      const lw = Math.max(...rows.map((r) => t.short[r.key].length)) * 0.62 + 0.4;
+      const html = rows
+        .map((r) => {
+          const sel = r.key === selKey;
+          const segs = intervals(profile.schedules[r.key])
+            .map((iv) => {
+              const w = ((iv.e - iv.s) / 1440) * 100;
+              const c = tempColors(iv.t, this._scale, this._dark);
+              return `<span class="wseg" style="width:${w}%;--bg:${c.bg};--fg:${c.fg}">${sel && w >= labelMinPct ? this._fmt(iv.t) + "°" : ""}</span>`;
+            })
+            .join("");
+          const now = r.today && profileName === s.effective_mode ? `<span class="now" style="left:calc(${nowPct}% - 1px)"></span>` : "";
+          const name = this._rowName(r.key) + (r.today ? `, ${t.today}` : "");
+          return `<button class="wrow${sel ? " sel" : ""}${r.today ? " today" : ""}" data-action="select" data-key="${r.key}" aria-pressed="${sel}" aria-label="${esc(name)}">
+            <span class="wlabel" aria-hidden="true">${esc(t.short[r.key])}</span>
+            <span class="wbar"><span class="wsegs">${segs}</span>${now}</span></button>`;
         })
         .join("");
       const ticks = [];
       for (let h = 0; h <= 24; h += tickStep) ticks.push(`<span style="left:${(h / 24) * 100}%">${h}:00</span>`);
+      return `<div class="week" role="group" aria-label="${esc(t.weekAria)}" style="--lw:${lw.toFixed(2)}em">
+        ${html}<div class="waxis" aria-hidden="true">${ticks.join("")}</div></div>`;
+    }
+
+    /** Éditeur accessible de la ligne sélectionnée : liste des plages, ajout, copie vers d'autres jours. */
+    _editorHtml(profileName, key) {
+      const t = this.t;
+      const s = this._state;
       const editable = this._canEdit();
+      const ivs = intervals(s.data.profiles[profileName].schedules[key]);
+      const today = gridRows(s.data.profiles[profileName].layout, weekdayOf(new Date())).some((r) => r.key === key && r.today);
+      const name = this._rowName(key);
       const blocks = ivs
         .map((iv, i) => {
           const c = tempColors(iv.t, this._scale, this._dark);
           const inner = `<span><span class="range">${toStr(iv.s)} – ${toStr(iv.e)}</span><span class="deg">${this._fmt(iv.t)}°</span></span>`;
           const style = `--accent:${c.accent};--tint:${c.tint}`;
           return editable
-            ? `<button class="block" data-action="edit" data-profile="${profileName}" data-key="${sec.key}" data-index="${i}" style="${style}">${inner}</button>`
+            ? `<button class="block" data-action="edit" data-profile="${profileName}" data-key="${key}" data-index="${i}" style="${style}">${inner}</button>`
             : `<div class="block" style="${style}">${inner}</div>`;
         })
         .join("");
       const tools = editable
         ? `<div class="tools">
-          <div class="tool-group">
-            <button class="btn" data-action="copy" data-profile="${profileName}" data-key="${sec.key}">${esc(t.copy)}</button>
-            <button class="btn" data-action="paste" data-profile="${profileName}" data-key="${sec.key}" ${this._clipboard ? "" : "disabled"}>${esc(t.paste)}</button>
-          </div>
-          <button class="link" data-action="add" data-profile="${profileName}" data-key="${sec.key}">${esc(t.addBlock)}</button>
-        </div>`
+            <button class="btn" data-action="copy-open" aria-expanded="${this._copyOpen}">${esc(t.copyTo)}</button>
+            <button class="btn" data-action="add" data-profile="${profileName}" data-key="${key}">${esc(t.addBlock)}</button>
+          </div>${this._copyOpen ? this._copyHtml(profileName, key, name) : ""}`
         : "";
-
-      return `<div class="section ${open ? "open" : ""}">
-        <button class="sec-head" data-action="toggle" data-id="${id}" aria-expanded="${open}">
-          <span class="sec-name">${esc(sec.label)}${sec.today && s.data.profiles[profileName].layout === "daily" ? `<small>${this._lang === "fr" ? "aujourd'hui" : "today"}</small>` : ""}</span>
-          <span class="chev"></span>
-        </button>
-        <div class="bar-wrap">
-          <div class="bar">${bar}${showNow ? `<div class="now" style="left:${nowPct}%"></div>` : ""}</div>
-          <div class="axis">${ticks.join("")}</div>
-        </div>
+      return `<section class="editor" aria-label="${esc(name)}">
+        <div class="ed-name">${esc(name)}${today && key !== "all" ? `<small>${esc(t.today)}</small>` : ""}</div>
         <div class="blocks">${blocks}</div>
         ${tools}
+      </section>`;
+    }
+
+    /** Panneau « Copier vers » : cases des lignes de chaque profil. */
+    _copyHtml(profileName, key, name) {
+      const t = this.t;
+      const [before, after] = t.copyFrom.split("{day}");
+      const groups = copyTargets(this._state.data, { profile: profileName, key })
+        .map(
+          (g) => `<div class="copy-group" role="group" aria-label="${esc(t[g.profile === "home" ? "tabHome" : "tabAway"])}">
+            <span class="copy-prof" aria-hidden="true">${esc(t[g.profile === "home" ? "tabHome" : "tabAway"])}</span>
+            <div class="chips">${g.keys
+              .map((k) => {
+                const id = `${g.profile}:${k}`;
+                return `<label class="chip"><input type="checkbox" data-action="copy-pick" data-target="${id}" aria-label="${esc(this._rowName(k))}" ${this._copySel.has(id) ? "checked" : ""}><span aria-hidden="true">${esc(t.short[k])}</span></label>`;
+              })
+              .join("")}</div></div>`
+        )
+        .join("");
+      return `<div class="copy" id="copy-panel">
+        <div class="copy-what">${esc(before)}<b>${esc(name)}</b>${esc(after || "")}</div>
+        ${groups}
+        <div class="copy-actions">
+          <button class="btn" data-action="copy-cancel">${esc(t.cancel)}</button>
+          <button class="btn primary" data-action="copy-apply" ${this._copySel.size ? "" : "disabled"}>${esc(t.copyApply)}</button>
+        </div>
       </div>`;
     }
 
@@ -1001,7 +1184,7 @@
           : `<div class="field"><label for="${id}">${esc(label)}</label><input type="time" id="${id}" value="${esc(value)}" step="60"></div>`;
       return `<div class="overlay" data-action="overlay">
         <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(m.kind === "edit" ? t.editBlock : t.newBlock)}">
-          <h3>${esc(m.kind === "edit" ? t.editBlock : t.newBlock)}</h3>
+          <h3>${esc(m.kind === "edit" ? t.editBlock : t.newBlock)} · ${esc(this._rowName(m.key))}</h3>
           ${timeField("m-start", t.start, toStr(m.s), first)}
           ${timeField("m-end", t.end, toStr(m.e), last)}
           <div class="field"><label for="m-temp">${esc(t.temp)}</label>
@@ -1028,6 +1211,11 @@
         this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card><div class="msg">…</div></ha-card>`;
         return;
       }
+      // Rendu complet : on retient l'élément qui a le focus pour le lui rendre ensuite.
+      const active = this.shadowRoot.activeElement;
+      const focus = this._returnFocus || focusSelector(active);
+      this._returnFocus = null;
+
       const t = this.t;
       const title = (this._config && this._config.title) || defaultTitle(t.title, this._state);
       let body;
@@ -1038,9 +1226,12 @@
       } else {
         const s = this._state;
         const profile = s.data.profiles[this._profile];
-        const ro = this._canEdit() ? "" : "disabled";
-        const tab = (name) =>
-          `<button class="tab ${this._profile === name ? "on" : ""}" data-action="tab" data-profile="${name}">${esc(t[name === "home" ? "tabHome" : "tabAway"])}${s.effective_mode === name ? `<span class="dot" title="${esc(t.activeBadge)}"></span>` : ""}</button>`;
+        const editable = this._canEdit();
+        const ro = editable ? "" : "disabled";
+        const tab = (name) => {
+          const on = this._profile === name;
+          return `<button class="tab${on ? " on" : ""}" role="tab" aria-selected="${on}" data-action="tab" data-profile="${name}">${esc(t[name === "home" ? "tabHome" : "tabAway"])}${s.effective_mode === name ? `<span class="badge" title="${esc(t.activeBadge)}">${esc(t.activeShort)}</span>` : ""}</button>`;
+        };
         const multi = s.zone_count > 1;
         // « Zone absente » : ligne affichée seulement avec l'option show_zone_away.
         const zoneMode = zoneAwayDisplay(this._config, s);
@@ -1050,40 +1241,48 @@
           (zoneMode === "hint" ? `<div class="hint">${esc(t.zoneAwayOn)}</div>` : "");
         const zoneAway =
           zoneMode === "row"
-            ? `<div class="row"><div><div class="label">${esc(t.zoneAway)}</div><div class="hint">${esc(t.zoneAwayHint)}</div></div>
-            <label class="switch"><input type="checkbox" data-action="zone-away-switch" ${s.zone_away ? "checked" : ""}><span></span></label></div>`
+            ? `<div class="row"><div><div class="label" id="zone-away-label">${esc(t.zoneAway)}</div><div class="hint">${esc(t.zoneAwayHint)}</div></div>
+            <label class="switch"><input type="checkbox" data-action="zone-away-switch" aria-labelledby="zone-away-label" ${s.zone_away ? "checked" : ""}><span></span></label></div>`
             : "";
+        const selKey = this._selKey(this._profile);
         body = `
-          <div class="tabs" role="tablist">${tab("home")}${tab("away")}</div>
-          <div class="row"><div><div class="label">${esc(t.manualAway)}</div>${forced}</div>
-            <label class="switch"><input type="checkbox" data-action="away-switch" ${s.data.manual_mode === "away" ? "checked" : ""}><span></span></label></div>
+          <div class="row"><div><div class="label" id="away-label">${esc(t.manualAway)}</div>${forced}</div>
+            <label class="switch"><input type="checkbox" data-action="away-switch" aria-labelledby="away-label" ${s.data.manual_mode === "away" ? "checked" : ""}><span></span></label></div>
           ${zoneAway}
-          ${this._sections(profile.layout).map((sec) => this._sectionHtml(this._profile, sec)).join("")}
+          <div class="tabs" role="tablist">${tab("home")}${tab("away")}</div>
+          ${editable ? "" : `<div class="ro-note"><ha-icon icon="mdi:lock-outline"></ha-icon><span>${esc(t.readOnly)}</span></div>`}
+          ${this._weekHtml(this._profile, selKey)}
+          ${selKey ? this._editorHtml(this._profile, selKey) : `<div class="pick">${esc(editable ? t.pickDay : t.pickDayRo)}</div>`}
           <details class="settings" id="settings" ${this._settingsOpen ? "open" : ""}>
-            <summary><span class="sec-name">${esc(t.settings)}</span>
+            <summary><span class="sum-name">${esc(t.settings)}</span>
               <span class="sum-hint">${esc(t["layout_" + profile.layout])}${s.data.enabled ? "" : ` · ${esc(t.off)}`}</span>
               <span class="chev"></span></summary>
             <div class="row"><label class="label" for="layout-select">${esc(t.layout)}</label>
               <select id="layout-select" data-action="layout" ${ro}>
                 ${["all", "weekday_weekend", "daily"].map((l) => `<option value="${l}" ${profile.layout === l ? "selected" : ""}>${esc(t["layout_" + l])}</option>`).join("")}
               </select></div>
-            <div class="row"><div class="label">${esc(t.enabled)}</div>
-              <label class="switch"><input type="checkbox" data-action="enabled-switch" aria-label="${esc(t.enabled)}" ${s.data.enabled ? "checked" : ""} ${ro}><span></span></label></div>
+            <div class="row"><div class="label" id="enabled-label">${esc(t.enabled)}</div>
+              <label class="switch"><input type="checkbox" data-action="enabled-switch" aria-labelledby="enabled-label" ${s.data.enabled ? "checked" : ""} ${ro}><span></span></label></div>
           </details>
-          <div id="save-status" class="status"></div>
-          ${ro ? `<div class="status">${esc(t.readOnly)}</div>` : ""}`;
+          <div id="save-status" class="status" role="status"></div>`;
       }
       this.shadowRoot.innerHTML = `<style>${STYLE}</style>
         <ha-card>
-          <div class="head">
-            <div class="title-row"><div class="title">${esc(title)}</div><span class="hvac" id="hvac"></span></div>
-            <div class="live" id="live">${this._liveHtml()}</div>
-          </div>
-          ${this._ctrlHtml()}
+          ${this._heroHtml(title)}
           ${body}
         </ha-card>${this._modalHtml()}`;
-      this._updateCtrl();
+      this._updateLive();
       this._updateSaveStatus();
+
+      const root = this.shadowRoot;
+      if (this._modal) {
+        // Fenêtre ouverte : focus sur le premier champ modifiable.
+        const first = root.querySelector(".modal input:not([disabled])");
+        if (first && !(active && active.closest && active.closest(".modal"))) first.focus();
+      } else if (focus) {
+        const el = root.querySelector(focus);
+        if (el) el.focus();
+      }
     }
 
     // -- interactions ------------------------------------------------------
@@ -1097,8 +1296,15 @@
     }
 
     _closeModal() {
+      const m = this._modal;
       this._modal = null;
+      if (m && m.returnFocus) this._returnFocus = m.returnFocus;
       this._render();
+    }
+
+    _resetCopy() {
+      this._copyOpen = false;
+      this._copySel = new Set();
     }
 
     _onChange(e) {
@@ -1108,10 +1314,17 @@
       if (EDIT_ACTIONS.has(action) && !this._canEdit()) return this._render();
       if (action === "layout") {
         seedLayout(this._profileData(this._profile), el.value);
+        this._resetCopy();
         this._commit();
       } else if (action === "enabled-switch") {
         this._state.data.enabled = el.checked;
         this._commit();
+      } else if (action === "copy-pick") {
+        // Sans nouveau rendu : on garde le focus sur la case.
+        if (el.checked) this._copySel.add(el.dataset.target);
+        else this._copySel.delete(el.dataset.target);
+        const apply = this.shadowRoot.querySelector('[data-action="copy-apply"]');
+        if (apply) apply.disabled = !this._copySel.size;
       } else if (action === "away-switch") {
         const mode = el.checked ? "away" : "home";
         this._state.data.manual_mode = mode;
@@ -1148,27 +1361,46 @@
         });
       } else if (a === "tab") {
         this._profile = profile;
+        this._resetCopy();
         this._render();
-      } else if (a === "toggle") {
-        const section = el.closest(".section");
-        this._open[el.dataset.id] = !section.classList.contains("open");
-        section.classList.toggle("open");
-        el.setAttribute("aria-expanded", String(this._open[el.dataset.id]));
-      } else if (a === "copy") {
-        this._clipboard = clone(this._profileData(profile).schedules[key]);
-        this._status = "copied";
+      } else if (a === "select") {
+        // Toucher la ligne choisie la referme.
+        this._sel[this._profile] = this._selKey(this._profile) === key ? null : key;
+        this._resetCopy();
         this._render();
-      } else if (a === "paste" && this._clipboard) {
-        this._profileData(profile).schedules[key] = clone(this._clipboard);
+      } else if (a === "copy-open") {
+        const open = !this._copyOpen;
+        this._resetCopy();
+        this._copyOpen = open;
+        this._render();
+      } else if (a === "copy-cancel") {
+        this._resetCopy();
+        this._returnFocus = '[data-action="copy-open"]';
+        this._render();
+      } else if (a === "copy-apply") {
+        const src = { profile: this._profile, key: this._selKey(this._profile) };
+        if (!src.key) return;
+        // Seules les destinations encore proposées (le layout a pu changer).
+        const valid = new Set(copyTargets(this._state.data, src).flatMap((g) => g.keys.map((k) => `${g.profile}:${k}`)));
+        const targets = [...this._copySel]
+          .filter((id) => valid.has(id))
+          .map((id) => {
+            const [p, k] = id.split(":");
+            return { profile: p, key: k };
+          });
+        this._resetCopy();
+        this._returnFocus = '[data-action="copy-open"]';
+        if (!targets.length) return this._render();
+        this._state.data = copyTo(this._state.data, src, targets);
         this._commit();
       } else if (a === "edit") {
         const i = Number(el.dataset.index);
         const iv = intervals(this._profileData(profile).schedules[key])[i];
-        this._modal = { kind: "edit", profile, key, index: i, s: iv.s, e: iv.e, t: iv.t };
+        this._modal = { kind: "edit", profile, key, index: i, s: iv.s, e: iv.e, t: iv.t, returnFocus: focusSelector(el) };
         this._render();
       } else if (a === "add") {
         const r = suggestRange(this._profileData(profile).schedules[key]);
-        this._modal = { kind: "add", profile, key, s: r.s, e: r.e, t: r.t };
+        this._modal = { kind: "add", profile, key, s: r.s, e: r.e, t: r.t, returnFocus: focusSelector(el) };
         this._render();
       } else if (a === "step") {
         const input = this.shadowRoot.getElementById("m-temp");
@@ -1186,6 +1418,8 @@
         if (res.error) return this._modalError(res.error);
         this._profileData(m.profile).schedules[m.key] = res.segs;
         this._modal = null;
+        // La plage supprimée n'existe plus : focus sur « Ajouter une plage ».
+        this._returnFocus = '[data-action="add"]';
         this._commit();
       } else if (a === "modal-save") {
         this._saveModal();
@@ -1223,11 +1457,13 @@
       if (result.error) return this._modalError(result.error);
       profile.schedules[m.key] = result.segs;
       this._modal = null;
+      // Les plages ont pu être renumérotées : focus sur « Ajouter une plage ».
+      this._returnFocus = '[data-action="add"]';
       this._commit();
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);
