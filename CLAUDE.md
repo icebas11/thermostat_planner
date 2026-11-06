@@ -63,6 +63,13 @@ Ideas agreed with the user to implement later, in suggested order. Already done:
    - undo / redo after an edit or paste (every change is saved immediately);
    - visual card editor (`getConfigElement`) for `title`, `expand_today`, `show_controls`, `override_duration`, `colors`;
    - overlay the actual room temperature curve (history) on today's bar;
+7. **Set aside from the v0.7 design review** (`design-reviews/v07/`, user's choice "pour plus tard"):
+   - "paint brush" editing: pick a temperature in the legend, drag across one or several grid rows (15 min snap, several days at once), toast with Undo — a variant of item 2 reusing `paint()`;
+   - override shortcuts under the setpoint: "+1° for 1 h", "Eco until next morning", "Back home at HH:MM" (Away until then, warm on arrival); configurable `shortcuts:`;
+   - weekly summary: weighted average setpoint, comfort hours, rough saving vs 20 °C constant (ADEME ≈ 7 %/°C), real heating hours per day from `hvac_action` history;
+   - holidays with a return time on a mini calendar (see item 3);
+   - open-window detection: room drops > 1 °C in 5 min or an opening `binary_sensor` → temporary eco override with a "Resume" banner (server side);
+   - whole-house card `format: house`: one row per zone (name, room, setpoint, heating dot, 12 h mini ribbon).
 
 ## Releasing
 
