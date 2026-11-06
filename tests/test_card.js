@@ -360,6 +360,59 @@ assert.equal(fmtDuration(44.2, "fr"), "45 min", "minute entamée comptée");
 assert.equal(fmtDuration(0, "fr"), "0 min");
 assert.equal(fmtDuration(-3, "en"), "0 min");
 
+// ---- Format compact (cardFormat / ribbon / ribbonTicks) -------------------------
+const { cardFormat, ribbon, ribbonTicks } = H;
+assert.equal(cardFormat({}), "full", "sans option : format actuel");
+assert.equal(cardFormat(undefined), "full");
+assert.equal(cardFormat({ format: "" }), "full");
+assert.equal(cardFormat({ format: "compact" }), "compact");
+assert.equal(cardFormat({ format: "full" }), "full");
+assert.throws(() => cardFormat({ format: "mini" }), /format/);
+
+const rib = (r) => r.map((p) => [p.start, p.end, p.temp, p.ovr]);
+// Vendredi 18:40, dérogation 21,5° jusqu'à 20:30 : hachurée, puis 20,5° → 22:30, puis 17° jusqu'à 06:40 samedi
+// (samedi 00:00 et 08:30 : week-end 17° puis 20,5° hors fenêtre).
+assert.deepEqual(rib(ribbon(mkData(), "home", ovr, at(6, 18, 40))), [
+  [0, 110, 21.5, true],
+  [110, 230, 20.5, false],
+  [230, 720, 17, false],
+]);
+assert.equal(ribbon(mkData(), "home", ovr, at(6, 18, 40))[1].at.getTime(), at(6, 20, 30).getTime());
+// Sans dérogation, samedi 01:00 : 17° jusqu'à 08:30 puis 20,5°.
+assert.deepEqual(rib(ribbon(mkData(), "home", null, at(7, 1, 0))), [
+  [0, 450, 17, false],
+  [450, 720, 20.5, false],
+]);
+// Dérogation à la même température que le planning : reste distincte (hachurée).
+assert.deepEqual(rib(ribbon(mkData(), "home", { temp: 20.5, until: at(6, 19, 0).toISOString() }, at(6, 18, 40))).slice(0, 2), [
+  [0, 20, 20.5, true],
+  [20, 230, 20.5, false],
+]);
+// Dérogation expirée : ignorée.
+assert.equal(ribbon(mkData(), "home", { temp: 25, until: at(6, 18, 0).toISOString() }, at(6, 18, 40))[0].ovr, false);
+// Fenêtre plus courte que la dérogation : un seul morceau.
+assert.deepEqual(rib(ribbon(mkData(), "home", ovr, at(6, 18, 40), 1)), [[0, 60, 21.5, true]]);
+// Planification en pause : vide sans dérogation, sinon la dérogation puis « sans consigne ».
+assert.deepEqual(ribbon(mkData(false), "home", null, at(6, 18, 40)), []);
+assert.deepEqual(rib(ribbon(mkData(false), "home", ovr, at(6, 18, 40))), [
+  [0, 110, 21.5, true],
+  [110, 720, null, false],
+]);
+// Une seule consigne : un seul morceau ; profil Absent (layout all).
+assert.deepEqual(rib(ribbon(flat, "home", null, at(6, 12, 0))), [[0, 720, 19, false]]);
+assert.deepEqual(rib(ribbon(mkData(), "away", null, at(6, 18, 40))), [
+  [0, 140, 16, false],
+  [140, 710, 15, false],
+  [710, 720, 16, false],
+]);
+
+const ticks = ribbonTicks(ribbon(mkData(), "home", ovr, at(6, 18, 40)), 720, 12);
+assert.deepEqual(ticks.map((k) => Math.round(k.pos * 10) / 10), [0, 15.3, 31.9]);
+assert.equal(ticks[0].at.getTime(), at(6, 18, 40).getTime(), "premier repère : maintenant");
+// Repère trop proche du précédent : omis.
+assert.deepEqual(ribbonTicks(ribbon(mkData(), "home", { temp: 20.5, until: at(6, 19, 0).toISOString() }, at(6, 18, 40)), 720, 12).map((k) => Math.round(k.pos)), [0, 32]);
+assert.deepEqual(ribbonTicks([], 720, 12), []);
+
 // ---- Focus conservé après un rendu complet --------------------------------------
 assert.equal(focusSelector({ dataset: { action: "select", key: "mon" } }), '[data-action="select"][data-key="mon"]');
 assert.equal(focusSelector({ dataset: { action: "copy-pick", target: "home:tue" } }), '[data-action="copy-pick"][data-target="home:tue"]');

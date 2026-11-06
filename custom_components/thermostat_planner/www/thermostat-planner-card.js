@@ -80,6 +80,16 @@
       eEraseBefore: "Le début doit rester après le début de la plage précédente.",
       eEraseAfter: "La fin doit rester avant la fin de la plage suivante.",
       eLast: "Il faut garder au moins une plage.",
+      heatingShort: "chauffe",
+      idleShort: "au repos",
+      openPlanning: "Planning",
+      openPlanningAria: "Ouvrir le planning complet",
+      closePlanning: "Réduire",
+      closePlanningAria: "Revenir à la carte compacte",
+      nextHours: "Les {h} prochaines heures",
+      nextShort: "{temp} à {time}",
+      inDur: "dans {d}",
+      untilT: "{temp} jusqu'à {time}",
     },
     en: {
       title: "Heating schedule",
@@ -150,6 +160,16 @@
       eEraseBefore: "Start must stay after the previous block's start.",
       eEraseAfter: "End must stay before the next block's end.",
       eLast: "At least one block is required.",
+      heatingShort: "heating",
+      idleShort: "idle",
+      openPlanning: "Schedule",
+      openPlanningAria: "Open the full schedule",
+      closePlanning: "Collapse",
+      closePlanningAria: "Back to the compact card",
+      nextHours: "Next {h} hours",
+      nextShort: "{temp} at {time}",
+      inDur: "in {d}",
+      untilT: "{temp} until {time}",
     },
   };
 
@@ -507,6 +527,71 @@
     return lang === "fr" ? `${h} h ${String(r).padStart(2, "0")}` : `${h} h ${r} min`;
   }
 
+  /** Format de la carte (option `format`) : "full" (par défaut, planning complet) ou "compact" (coup d'œil). */
+  function cardFormat(config) {
+    const f = config && config.format;
+    if (f === undefined || f === null || f === "") return "full";
+    if (f !== "full" && f !== "compact")
+      throw new Error('thermostat-planner-card: format doit valoir "full" ou "compact"');
+    return f;
+  }
+
+  /**
+   * Ruban des `hours` prochaines heures à partir de `now` : [{ start, end, temp, ovr, at }],
+   * `start` / `end` en minutes depuis `now`, `at` la date de début. La dérogation (ovr: true) passe
+   * avant le planning ; temp null si la planification est en pause. Plages voisines identiques fusionnées.
+   * Liste vide si la planification est en pause et qu'il n'y a pas de dérogation.
+   */
+  function ribbon(data, mode, override, now, hours = 12) {
+    const t0 = now.getTime();
+    const t1 = t0 + hours * 3600000;
+    let until = null;
+    if (override && override.until) {
+      const u = new Date(override.until).getTime();
+      if (!Number.isNaN(u) && u > t0) until = u;
+    }
+    if (!data.enabled && until === null) return [];
+    const profile = data.profiles[mode];
+    const cuts = new Set([t0, t1]);
+    if (until !== null && until < t1) cuts.add(until);
+    if (data.enabled) {
+      for (let off = 0; off <= Math.ceil(hours / 24) + 1; off++) {
+        const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + off);
+        profile.schedules[keyFor(profile.layout, weekdayOf(day))].forEach((g) => {
+          const m = toMin(g.start);
+          const ts = new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(m / 60), m % 60).getTime();
+          if (ts > t0 && ts < t1) cuts.add(ts);
+        });
+      }
+    }
+    const pts = [...cuts].sort((a, b) => a - b);
+    const out = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const ovr = until !== null && a < until;
+      const temp = ovr ? Number(override.temp) : data.enabled ? targetAt(profile, new Date(a)) : null;
+      const last = out[out.length - 1];
+      const end = (pts[i + 1] - t0) / 60000;
+      if (last && last.temp === temp && last.ovr === ovr) last.end = end;
+      else out.push({ start: (a - t0) / 60000, end, temp, ovr, at: new Date(a) });
+    }
+    return out;
+  }
+
+  /**
+   * Repères sous le ruban : début de chaque plage, en % de `total` minutes. Le premier (maintenant) est
+   * toujours gardé ; un repère trop proche du précédent (moins de `minGap` %) est omis.
+   */
+  function ribbonTicks(pieces, total, minGap) {
+    const out = [];
+    pieces.forEach((p) => {
+      const pos = (p.start / total) * 100;
+      if (out.length && pos - out[out.length - 1].pos < minGap) return;
+      out.push({ pos, at: p.at });
+    });
+    return out;
+  }
+
   /** Sélecteur CSS qui retrouve un élément `data-action` après un nouveau rendu (pour lui rendre le focus). */
   function focusSelector(el) {
     if (!el || !el.dataset || !el.dataset.action) return el && el.id ? `#${el.id}` : null;
@@ -680,6 +765,50 @@
     .modal .err { color: var(--error-color, #db4437); min-height: 1.3em; font-size: .875rem; margin-bottom: 8px; }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .actions .right { display: flex; gap: 8px; margin-left: auto; }
+    /* Format compact (option format: compact) : maintenant et ensuite, sans édition. */
+    ha-card.compact { padding: 14px 16px 16px; }
+    .c-top { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+    .c-zone { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 1rem; font-weight: 500; color: var(--primary-text-color); }
+    .c-mode { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--secondary-background-color);
+      font-size: .75rem; color: var(--secondary-text-color); }
+    .c-mode.away { background: color-mix(in srgb, var(--primary-color) 18%, transparent); color: var(--primary-text-color); }
+    .c-top .hvac { margin-left: auto; align-items: center; gap: 4px; font-size: .8125rem; --mdc-icon-size: 18px; }
+    .c-top .hvac:not(.on) { color: var(--secondary-text-color); }
+    .c-top .hvac ha-icon { width: 18px; height: 18px; }
+    .c-hero { display: flex; align-items: flex-end; gap: 6px 16px; flex-wrap: wrap; margin-top: 2px; }
+    .c-hero .big { font-size: 4.5rem; line-height: .95; font-weight: 300; letter-spacing: -.04em; }
+    .c-hero .big small { font-size: 1.375rem; margin-top: .3em; }
+    .c-side { padding-bottom: 6px; font-size: .875rem; line-height: 1.5; color: var(--secondary-text-color);
+      font-variant-numeric: tabular-nums; }
+    .c-side b { color: var(--primary-text-color); font-weight: 500; }
+    .c-side .c-room b { font-size: 1rem; }
+    .c-rib { margin-top: 14px; }
+    .c-bar { display: flex; gap: 2px; height: 30px; border-radius: 8px; overflow: hidden; }
+    .c-seg { min-width: 0; display: flex; align-items: center; padding-left: 8px; overflow: hidden; white-space: nowrap;
+      background: var(--bg); color: var(--fg); font-size: .8125rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .c-seg.hatch { background: repeating-linear-gradient(135deg, var(--bg) 0 6px,
+      color-mix(in srgb, var(--accent-color, #ff9800) 45%, var(--bg)) 6px 9px); }
+    .c-seg.none { background: var(--secondary-background-color); color: var(--secondary-text-color); }
+    .c-ticks { position: relative; height: 18px; margin-top: 4px; font-size: .75rem; color: var(--secondary-text-color);
+      font-variant-numeric: tabular-nums; }
+    .c-ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+    .c-ticks span:first-child { transform: none; color: var(--primary-text-color); font-weight: 500; }
+    .c-ticks span.end { transform: translateX(-100%); }
+    .c-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .c-actions .sq { flex: 1; min-height: 48px; border: 0; border-radius: 14px; background: var(--secondary-background-color);
+      color: var(--primary-text-color); font-size: 1.5rem; line-height: 1; }
+    .c-actions .sq[disabled] { opacity: .45; cursor: default; }
+    .c-actions .plan { flex: 1.3; min-height: 48px; border: 0; border-radius: 14px; background: var(--secondary-background-color);
+      color: var(--primary-text-color); font-size: .9375rem; font-weight: 500;
+      display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .c-actions .plan:only-child { flex: none; margin-left: auto; padding: 0 18px; }
+    ha-card.compact .status:empty { display: none; }
+    .chev-r { width: 8px; height: 8px; border-right: 2px solid currentColor; border-top: 2px solid currentColor;
+      transform: rotate(45deg); flex: none; }
+    .title-row:has(.collapse) .title { flex: 1; }
+    .collapse { flex: none; min-height: 44px; padding: 0 12px; border: 0; border-radius: 10px;
+      background: var(--secondary-background-color); color: var(--primary-text-color); font-weight: 500; }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   `;
 
@@ -731,6 +860,9 @@
       const changed = this._target !== undefined && JSON.stringify(target) !== JSON.stringify(this._target);
       this._target = target;
       this._config = { ...config };
+      const format = cardFormat(config);
+      if (format !== this._format) this._expanded = false;
+      this._format = format;
       if (changed) {
         // Autre zone (éditeur de carte) : nouvel abonnement.
         if (this._unsub) {
@@ -750,12 +882,18 @@
     }
 
     getCardSize() {
-      return 7;
+      return this._format === "compact" ? 4 : 7;
     }
 
     // Vue « sections » : toute la largeur de la section (même sur 2+ colonnes), hauteur automatique.
+    // Format compact : la largeur d'une section, pour en aligner plusieurs (une par zone).
     getGridOptions() {
-      return { columns: "full", min_columns: 6 };
+      return this._format === "compact" ? { columns: 12, min_columns: 6 } : { columns: "full", min_columns: 6 };
+    }
+
+    /** Format compact affiché (et non le planning complet ouvert depuis la carte compacte). */
+    _isCompact() {
+      return this._format === "compact" && !this._expanded;
     }
 
     /** Seuils d'affichage dépendant de la largeur réelle des barres de la grille. */
@@ -912,15 +1050,107 @@
     }
 
     _updateLive() {
-      const el = this.shadowRoot.getElementById("live");
-      if (el) {
-        const html = this._liveHtml();
+      const set = (id, fn) => {
+        const el = this.shadowRoot.getElementById(id);
+        if (!el) return;
+        const html = fn();
         if (el._html !== html) {
           el._html = html;
           el.innerHTML = html;
         }
+      };
+      if (this._isCompact()) {
+        set("c-side", () => this._compactSideHtml());
+        set("c-rib", () => this._ribbonHtml());
+      } else {
+        set("live", () => this._liveHtml());
       }
       this._updateCtrl();
+    }
+
+    // -- format compact ------------------------------------------------------
+    /** Carte compacte : zone, mode, chauffe ; consigne et ± ; dérogation ; ruban des 12 prochaines heures. */
+    _compactHtml(title, msg) {
+      const t = this.t;
+      const s = this._state;
+      let mode = "";
+      if (s) {
+        const why = s.forced_by_entity ? `${t.forcedBy} ${s.away_entity}` : s.zone_away ? t.zoneAwayOn : "";
+        mode = `<span class="c-mode${s.effective_mode === "away" ? " away" : ""}"${why ? ` title="${esc(why)}"` : ""}>${esc(t[s.effective_mode])}</span>`;
+      }
+      const top = `<div class="c-top"><span class="c-zone">${esc(title)}</span>${mode}<span class="hvac" id="hvac" data-text="1"></span></div>`;
+      if (msg) return `${top}<div class="msg">${esc(msg)}</div>`;
+      const controls = this._showControls();
+      const step = controls
+        ? `<button class="sq" data-action="ovr-step" data-dir="-1" aria-label="${esc(t.lower)}">−</button>
+           <button class="sq" data-action="ovr-step" data-dir="1" aria-label="${esc(t.raise)}">+</button>`
+        : "";
+      return `${top}
+        <div class="c-hero"><span class="big" id="ctrl-val" aria-live="polite"></span><div class="c-side" id="c-side"></div></div>
+        <div id="ctrl-info"></div>
+        <div class="c-rib" id="c-rib"></div>
+        <div class="c-actions">${step}
+          <button class="plan" data-action="planning-open" aria-label="${esc(t.openPlanningAria)}">${esc(t.openPlanning)}<span class="chev-r" aria-hidden="true"></span></button>
+        </div>
+        <div id="save-status" class="status" role="status"></div>`;
+    }
+
+    /** À côté de la consigne : température de la pièce, puis prochain changement (« → 20,5° à 20:30, dans 1 h 50 »). */
+    _compactSideHtml() {
+      const s = this._state;
+      if (!s) return "";
+      const t = this.t;
+      const lines = [];
+      const climate = this._climate();
+      const current = climate && climate.attributes.current_temperature;
+      if (current !== undefined && current !== null)
+        lines.push(`<div class="c-room"><b>${this._fmt(Number(current))}°</b> ${esc(t.room)}</div>`);
+      const now = new Date();
+      const next = upcoming(s.data, s.effective_mode, s.override, now);
+      if (next && next.temp !== null) {
+        const time = this._fmtTime(next.at.toISOString());
+        const temp = `${this._fmt(next.temp)}°`;
+        const dur = s.override ? "" : t.inDur.replace("{d}", fmtDuration((next.at.getTime() - now.getTime()) / 60000, this._lang));
+        const full = t.nextAt.replace("{time}", time).replace("{temp}", temp) + (dur ? `, ${dur}` : "");
+        const short = esc(t.nextShort).replace("{temp}", `<b>${temp}</b>`).replace("{time}", esc(time));
+        lines.push(`<div title="${esc(full)}"><span aria-hidden="true">→ ${short}${dur ? `, ${esc(dur)}` : ""}</span><span class="sr">${esc(full)}</span></div>`);
+      } else if (next) {
+        lines.push(`<div>${esc(t.next)} ${esc(this._fmtTime(next.at.toISOString()))}</div>`);
+      }
+      if (!s.data.enabled) lines.push(`<div>${esc(t.off)}</div>`);
+      return lines.join("");
+    }
+
+    /** Ruban des 12 prochaines heures : dérogation hachurée, puis les plages du planning. */
+    _ribbonHtml() {
+      const s = this._state;
+      if (!s) return "";
+      const t = this.t;
+      const hours = 12;
+      const total = hours * 60;
+      const pieces = ribbon(s.data, s.effective_mode, s.override, new Date(), hours);
+      if (!pieces.length) return "";
+      const bw = this._width ? this._width - 32 : 0;
+      const minPct = bw ? (46 / bw) * 100 : 12; // largeur mini d'une étiquette (température ou heure)
+      const endTime = (p) => this._fmtTime(new Date(p.at.getTime() + (p.end - p.start) * 60000).toISOString());
+      const segs = pieces
+        .map((p) => {
+          const w = ((p.end - p.start) / total) * 100;
+          if (p.temp === null) return `<span class="c-seg none" style="width:${w}%">${w >= minPct ? "—" : ""}</span>`;
+          const c = tempColors(p.temp, this._scale, this._dark);
+          return `<span class="c-seg${p.ovr ? " hatch" : ""}" style="width:${w}%;--bg:${c.bg};--fg:${c.fg}">${w >= minPct ? this._fmt(p.temp) + "°" : ""}</span>`;
+        })
+        .join("");
+      const ticks = ribbonTicks(pieces, total, minPct)
+        .map((k, i) => `<span${i && k.pos > 88 ? ' class="end"' : ""} style="left:${k.pos}%">${esc(this._fmtTime(k.at.toISOString()))}</span>`)
+        .join("");
+      const label =
+        t.nextHours.replace("{h}", hours) +
+        " : " +
+        pieces
+          .map((p) => t.untilT.replace("{temp}", p.temp === null ? "—" : `${this._fmt(p.temp)}°`).replace("{time}", endTime(p)))
+          .join(", ");
+      return `<div role="img" aria-label="${esc(label)}"><div class="c-bar">${segs}</div><div class="c-ticks">${ticks}</div></div>`;
     }
 
     // -- réglage courant du thermostat ---------------------------------------
@@ -972,7 +1202,11 @@
             <button class="round" data-action="ovr-step" data-dir="1" aria-label="${esc(t.raise)}">+</button>
           </div>`
         : "";
-      return `<div class="title-row"><div class="title">${esc(title)}</div><span class="hvac" id="hvac"></span></div>
+      const collapse =
+        this._format === "compact"
+          ? `<button class="collapse" data-action="planning-close" aria-label="${esc(t.closePlanningAria)}">${esc(t.closePlanning)}</button>`
+          : "";
+      return `<div class="title-row"><div class="title">${esc(title)}</div><span class="hvac" id="hvac"></span>${collapse}</div>
         ${this._state
           ? `<div class="hero"><div class="hero-main"><span class="big" id="ctrl-val" aria-live="polite"></span>
               <div class="live" id="live"></div></div>${step}</div>
@@ -998,7 +1232,8 @@
       if (hvac) {
         hvac.className = "hvac" + (action === "heating" ? " on" : "");
         hvac.title = action === "heating" ? t.heating : action ? t.idle : "";
-        setHtml(hvac, action ? `<ha-icon icon="${action === "heating" ? "mdi:fire" : "mdi:fire-off"}"></ha-icon>` : "");
+        const label = hvac.dataset.text ? `<span>${esc(action === "heating" ? t.heatingShort : t.idleShort)}</span>` : "";
+        setHtml(hvac, action ? `<ha-icon icon="${action === "heating" ? "mdi:fire" : "mdi:fire-off"}"></ha-icon>${label}` : "");
       }
 
       const val = root.getElementById("ctrl-val");
@@ -1217,6 +1452,19 @@
       this._returnFocus = null;
 
       const t = this.t;
+      if (this._isCompact()) {
+        const s = this._state;
+        const ctitle = (this._config && this._config.title) || (s && s.zone_name) || t.title;
+        const msg = s ? "" : this._loadError ? t[this._loadError] || t.notLoaded : t.connecting;
+        this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="compact">${this._compactHtml(ctitle, msg)}</ha-card>`;
+        this._updateLive();
+        this._updateSaveStatus();
+        if (focus) {
+          const el = this.shadowRoot.querySelector(focus);
+          if (el) el.focus();
+        }
+        return;
+      }
       const title = (this._config && this._config.title) || defaultTitle(t.title, this._state);
       let body;
       if (this._loadError && !this._state) {
@@ -1359,6 +1607,16 @@
           this._error = (err && err.message) || "";
           this._updateSaveStatus();
         });
+      } else if (a === "planning-open") {
+        this._expanded = true;
+        this._returnFocus = '[data-action="planning-close"]';
+        this._render();
+      } else if (a === "planning-close") {
+        this._expanded = false;
+        this._modal = null;
+        this._resetCopy();
+        this._returnFocus = '[data-action="planning-open"]';
+        this._render();
       } else if (a === "tab") {
         this._profile = profile;
         this._resetCopy();
@@ -1463,7 +1721,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector, cardFormat, ribbon, ribbonTicks };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);

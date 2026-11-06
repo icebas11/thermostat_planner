@@ -43,6 +43,7 @@ Copie `custom_components/thermostat_planner/` dans `<config>/custom_components/`
 type: custom:thermostat-planner-card
 climate: climate.salon      # obligatoire avec plusieurs thermostats (ou entry_id), voir « Plusieurs thermostats »
 title: Planning chauffage   # facultatif
+format: full                # facultatif : full (planning complet, par défaut) ou compact (coup d'œil, voir « Carte compacte »)
 expand_today: false         # facultatif : ne pas sélectionner aujourd'hui à l'ouverture (true par défaut)
 show_controls: true         # facultatif : boutons − / + de réglage immédiat (true par défaut)
 show_zone_away: true        # facultatif : interrupteur « Absent pour cette zone uniquement » (masqué par défaut)
@@ -73,6 +74,27 @@ colors:                     # facultatif : couleur des plages par paliers de tem
   l'autre (par exemple *Vendredi* vers *Lundi*, *Mardi* et *Jeudi*, ou vers le planning Absent).
 - **Réglages** (replié) : mode de programmation des jours et pause de la planification.
 - En **lecture seule**, la carte l'indique au-dessus de la grille : on peut consulter les jours, sans modifier.
+
+### Carte compacte (`format: compact`)
+Pour un tableau de bord mobile ou une carte par zone, `format: compact` affiche seulement l'essentiel, sur
+environ 300 px de haut :
+
+```yaml
+type: custom:thermostat-planner-card
+climate: climate.salon
+format: compact
+```
+
+- le nom de la zone (ou `title`), le mode **Maison / Absent** et l'état de chauffe du thermostat (`hvac_action`) ;
+- la **consigne actuelle** en grand, la température de la pièce et le prochain changement
+  (« → 20,5° à 20:30, dans 3 h 20 ») ;
+- pendant une dérogation, le même bandeau que la carte complète, avec **Reprendre le planning** ;
+- un **ruban des 12 prochaines heures** : la dérogation hachurée, puis les plages du planning ;
+- les boutons **−** / **+** (masqués avec `show_controls: false`) et **Planning ›**, qui ouvre la carte complète
+  à la place de la carte compacte (bouton **Réduire** pour revenir).
+
+On ne modifie pas le planning dans ce format. Les options `climate` / `entry_id`, `show_controls`,
+`override_duration` et `colors` s'appliquent ; sans `format`, la carte reste la carte complète.
 
 ### Plusieurs thermostats (zones)
 Chaque thermostat est une **entrée** de l'intégration, avec son propre planning, ses dérogations et ses entités.
