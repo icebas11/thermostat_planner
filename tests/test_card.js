@@ -195,4 +195,101 @@ assert.equal(zoneAwayDisplay({ show_zone_away: "true" }, { zone_away: false }), 
 assert.equal(zoneAwayDisplay({ show_zone_away: true }, { data: {} }), null, "ancien serveur sans zone_away");
 assert.equal(zoneAwayDisplay(undefined, null), null);
 
+// ---- Échelle de couleurs par défaut (tempColors) ------------------------------
+const { tempColors, parseScale, fmtTemp, targetAt, upcoming } = H;
+/** "hsl(h s% l% / a)" → { rgb: [0-1]×3, a }. */
+function hsl(str) {
+  const m = str.match(/^hsl\((\d+) (\d+)% (\d+)%(?: \/ ([\d.]+))?\)$/);
+  assert.ok(m, `couleur hsl attendue : ${str}`);
+  const [h, s, l] = [Number(m[1]), Number(m[2]) / 100, Number(m[3]) / 100];
+  const f = (n) => {
+    const k = (n + h / 30) % 12;
+    return l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+  };
+  return { h, s, rgb: [f(0), f(8), f(4)], a: m[4] === undefined ? 1 : Number(m[4]) };
+}
+const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+const lum = (rgb) =>
+  rgb
+    .map((x) => (x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4)))
+    .reduce((acc, x, i) => acc + x * [0.2126, 0.7152, 0.0722][i], 0);
+const contrast = (a, b) => {
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+};
+const over = (c, base) => c.rgb.map((x, i) => x * c.a + base[i] * (1 - c.a));
+// Fonds de carte du thème par défaut de Home Assistant (clair / sombre).
+const CARD = { light: hex("#ffffff"), dark: hex("#1c1c1c") };
+for (const theme of ["light", "dark"]) {
+  for (let t = 5; t <= 35; t += 0.5) {
+    const c = tempColors(t, null, theme === "dark");
+    const bg = hsl(c.bg);
+    // Texte posé sur les plages de la barre : contraste AA (4,5:1).
+    assert.ok(contrast(bg.rgb, hsl(c.fg).rgb) >= 4.5, `${theme} ${t}° : texte sur la plage`);
+    // Température en couleur sur le fond teinté des plages de la liste.
+    const tint = over(hsl(c.tint), CARD[theme]);
+    assert.ok(contrast(hsl(c.accent).rgb, tint) >= 4.5, `${theme} ${t}° : température de la liste`);
+    // Pas de vert : teintes hors 75–165, sauf quasi-gris.
+    assert.ok(bg.s < 0.2 || bg.h < 75 || bg.h > 165, `${theme} ${t}° : teinte ${bg.h} (vert)`);
+  }
+  // Thème clair : fonds clairs ; thème sombre : fonds sombres.
+  const l17 = lum(hsl(tempColors(17, null, theme === "dark").bg).rgb);
+  assert.ok(theme === "dark" ? l17 < 0.1 : l17 > 0.4, `${theme} : luminosité des fonds`);
+}
+// Les températures courantes d'un planning (17 / 20,5) se distinguent nettement.
+assert.ok(hsl(tempColors(17, null, false).bg).h > 180 && hsl(tempColors(20.5, null, false).bg).h < 45);
+assert.notEqual(tempColors(19, null, false).bg, tempColors(19, null, true).bg, "dépend du thème");
+// L'option `colors` prime, quel que soit le thème ; hors paliers, retour à l'échelle par défaut.
+const scale = parseScale([{ max: 18, color: "#123456", text_color: "#ffffff" }, { min: 21, color: "red", text_color: "black" }]);
+assert.equal(tempColors(17, scale, true).bg, "#123456");
+assert.equal(tempColors(17, scale, false).fg, "#ffffff");
+assert.equal(tempColors(22, scale, false).bg, "red");
+assert.equal(tempColors(19.5, scale, true).bg, tempColors(19.5, null, true).bg);
+assert.equal(parseScale(undefined), null);
+assert.throws(() => parseScale({}), /liste/);
+assert.throws(() => parseScale([{ min: 1 }]), /color/);
+
+// ---- Format des températures --------------------------------------------------
+assert.equal(fmtTemp(20.5, "fr"), "20,5");
+assert.equal(fmtTemp(20.5, "en"), "20.5");
+assert.equal(fmtTemp(17, "fr"), "17");
+assert.equal(fmtTemp("21.25", "en"), "21.3");
+
+// ---- Prochain changement (upcoming / targetAt) ---------------------------------
+const WEEK = seg(["00:00", 17], ["06:30", 20], ["08:15", 17.5], ["17:30", 20.5], ["22:30", 17]);
+const WEEKEND = seg(["00:00", 17], ["08:30", 20.5], ["23:30", 17]);
+const mkData = (enabled = true) => ({
+  enabled,
+  profiles: {
+    home: { layout: "weekday_weekend", schedules: { weekdays: WEEK, weekend: WEEKEND } },
+    away: { layout: "all", schedules: { all: seg(["00:00", 15], ["06:30", 16], ["21:00", 15]) } },
+  },
+});
+const at = (d, h, m) => new Date(2026, 10, d, h, m); // novembre 2026 : le 6 est un vendredi
+assert.equal(targetAt(mkData().profiles.home, at(6, 18, 40)), 20.5);
+assert.equal(targetAt(mkData().profiles.home, at(6, 6, 29)), 17);
+assert.equal(targetAt(mkData().profiles.home, at(7, 9, 0)), 20.5, "samedi : week-end");
+const same = (r, d, h, m, temp) => {
+  assert.ok(r, "changement attendu");
+  assert.equal(r.at.getTime(), at(d, h, m).getTime());
+  assert.equal(r.temp, temp);
+};
+same(upcoming(mkData(), "home", null, at(6, 18, 40)), 6, 22, 30, 17);
+same(upcoming(mkData(), "home", null, at(6, 6, 30)), 6, 8, 15, 17.5, "début de plage exact : la suivante");
+// Vendredi 23:00 : samedi 00:00 a la même consigne (17), le changement est samedi 08:30.
+same(upcoming(mkData(), "home", null, at(6, 23, 0)), 7, 8, 30, 20.5);
+same(upcoming(mkData(), "away", null, at(6, 22, 0)), 7, 6, 30, 16);
+// Dérogation : sa fin, puis la consigne du planning à cet instant.
+const ovr = { mode: "home", temp: 21.5, until: at(6, 20, 30).toISOString() };
+same(upcoming(mkData(), "home", ovr, at(6, 18, 40)), 6, 20, 30, 20.5);
+// Planification en pause : rien sans dérogation ; avec, l'heure de fin sans consigne.
+assert.equal(upcoming(mkData(false), "home", null, at(6, 18, 40)), null);
+const paused = upcoming(mkData(false), "home", ovr, at(6, 18, 40));
+assert.equal(paused.at.getTime(), at(6, 20, 30).getTime());
+assert.equal(paused.temp, null);
+// Une seule consigne toute la semaine : aucun changement.
+const flat = { enabled: true, profiles: { home: { layout: "all", schedules: { all: seg(["00:00", 19]) } } } };
+assert.equal(upcoming(flat, "home", null, at(6, 12, 0)), null);
+assert.equal(upcoming(mkData(), "home", { until: "n'importe quoi" }, at(6, 12, 0)), null);
+
 console.log("js OK");

@@ -15,6 +15,9 @@
       title: "Planning chauffage",
       home: "Maison",
       away: "Absent",
+      tabHome: "Planning Maison",
+      tabAway: "Planning Absent",
+      settings: "Réglages",
       activeBadge: "Mode actif",
       manualAway: "Passer en mode Absent",
       forcedBy: "Forcé Absent par",
@@ -46,6 +49,7 @@
       notLoaded: "Intégration Thermostat Planner non chargée. Vérifie qu'elle est ajoutée dans Paramètres › Appareils et services.",
       target: "Consigne",
       next: "prochain changement",
+      nextAt: "Prochain changement à {time} : {temp}",
       room: "pièce",
       override: "Dérogation jusqu'à",
       resume: "Reprendre le planning",
@@ -73,6 +77,9 @@
       title: "Heating schedule",
       home: "Home",
       away: "Away",
+      tabHome: "Home schedule",
+      tabAway: "Away schedule",
+      settings: "Settings",
       activeBadge: "Active mode",
       manualAway: "Switch to Away mode",
       forcedBy: "Forced Away by",
@@ -104,6 +111,7 @@
       notLoaded: "Thermostat Planner integration is not loaded. Make sure it is added under Settings › Devices & services.",
       target: "Target",
       next: "next change",
+      nextAt: "Next change at {time}: {temp}",
       room: "room",
       override: "Override until",
       resume: "Resume schedule",
@@ -297,20 +305,87 @@
     });
   }
 
-  /** Palier configuré (premier qui correspond), sinon dégradé bleu-vert (froid) → ambre (chaud). */
-  function tempColors(t, scale) {
+  /**
+   * Palier configuré (premier qui correspond), sinon échelle par défaut adaptée au thème,
+   * sans passer par le vert : bleu ardoise (froid) qui se désature jusqu'à 18 °C,
+   * puis sable → corail (confort) qui se sature jusqu'à 22 °C.
+   * Thème clair : fonds clairs et texte foncé ; thème sombre : fonds sombres et texte clair.
+   */
+  function tempColors(t, scale, dark) {
     const hit =
       scale &&
       scale.find((c) => (c.min === undefined || t >= c.min) && (c.max === undefined || t <= c.max));
     if (hit) return hit;
-    const r = Math.max(0, Math.min(1, (t - 10) / 14));
-    const h = Math.round(192 - r * 150);
-    return {
-      bg: `hsl(${h} 46% 30%)`,
-      fg: `hsl(${h} 85% 78%)`,
-      accent: `hsl(${h} 65% 50%)`,
-      tint: `hsl(${h} 60% 50% / 0.14)`,
-    };
+    const r = Math.max(0, Math.min(1, (t - 14) / 8)); // 14 °C → 22 °C
+    const cold = r < 0.5;
+    const k = cold ? 1 - r * 2 : (r - 0.5) * 2; // intensité 1 → 0 → 1
+    const h = Math.round(cold ? 214 : 40 - k * 26);
+    const sat = Math.round(14 + k * (cold ? 46 : 66));
+    const l = (x) => Math.round(x);
+    return dark
+      ? {
+          bg: `hsl(${h} ${sat}% ${l(27 + k * 9)}%)`,
+          fg: `hsl(${h} 80% 90%)`,
+          accent: `hsl(${h} ${sat + 10}% 68%)`,
+          tint: `hsl(${h} ${sat}% 50% / 0.16)`,
+        }
+      : {
+          bg: `hsl(${h} ${sat + 6}% ${l(86 - k * 18)}%)`,
+          fg: `hsl(${h} 60% 18%)`,
+          accent: `hsl(${h} ${sat + 10}% 36%)`,
+          tint: `hsl(${h} ${sat + 6}% 60% / 0.16)`,
+        };
+  }
+
+  /** Température au format local : virgule en français (20,5), point sinon (20.5). */
+  function fmtTemp(t, lang) {
+    const n = Number(t);
+    const s = Number.isInteger(n) ? String(n) : n.toFixed(1);
+    return lang === "fr" ? s.replace(".", ",") : s;
+  }
+
+  const weekdayOf = (date) => (date.getDay() + 6) % 7; // 0 = lundi
+
+  /** Consigne du planning d'un profil à l'instant `date` (heure locale), comme schedule.target_for. */
+  function targetAt(profile, date) {
+    const segs = profile.schedules[keyFor(profile.layout, weekdayOf(date))];
+    const m = date.getHours() * 60 + date.getMinutes();
+    let temp = segs[0].temp;
+    segs.forEach((g) => {
+      if (toMin(g.start) <= m) temp = g.temp;
+    });
+    return Number(temp);
+  }
+
+  /**
+   * Prochain changement de consigne affiché par la carte : { at: Date, temp } ou null.
+   * Même règle que schedule.planned côté serveur : pendant une dérogation, sa fin puis la
+   * consigne du planning à cet instant (temp null si la planification est en pause) ;
+   * sinon le prochain début de plage de température différente (sur 8 jours), ou null
+   * si la planification est en pause.
+   */
+  function upcoming(data, mode, override, now) {
+    const profile = data.profiles[mode];
+    if (override && override.until) {
+      const at = new Date(override.until);
+      if (Number.isNaN(at.getTime())) return null;
+      return { at, temp: data.enabled ? targetAt(profile, at) : null };
+    }
+    if (!data.enabled) return null;
+    const current = targetAt(profile, now);
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    for (let offset = 0; offset <= 8; offset++) {
+      const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+      const segs = profile.schedules[keyFor(profile.layout, weekdayOf(day))];
+      for (const g of segs) {
+        const start = toMin(g.start);
+        if (offset === 0 && start <= nowMin) continue;
+        if (Number(g.temp) !== current) {
+          return { at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(start / 60), start % 60), temp: Number(g.temp) };
+        }
+      }
+    }
+    return null;
   }
 
   /** Zone visée d'après la config de la carte : { entry_id } et/ou { climate }, ou {} (zone unique). */
@@ -370,6 +445,9 @@
     .hvac.on { color: var(--state-climate-heat-color, #ff8100); }
     .live { font-size: .875rem; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
     .live b { color: var(--primary-text-color); font-weight: 500; }
+    .next { white-space: nowrap; }
+    .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+      clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
     .ctrl { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 8px; }
     .pill { height: 52px; border: 0; border-radius: 999px; background: var(--secondary-background-color);
@@ -413,7 +491,14 @@
     .sec-name small { margin-left: 8px; font-size: .75rem; color: var(--primary-color); }
     .chev { width: 10px; height: 10px; border-right: 2px solid var(--secondary-text-color);
       border-bottom: 2px solid var(--secondary-text-color); transform: rotate(45deg); transition: transform .15s; margin-right: 4px; }
-    .section.open .chev { transform: rotate(-135deg); }
+    .section.open .chev, .settings[open] .chev { transform: rotate(-135deg); }
+
+    .settings { margin-top: 12px; border-top: 1px solid var(--divider-color); }
+    .settings summary { display: flex; align-items: center; gap: 12px; padding: 14px 4px; cursor: pointer;
+      list-style: none; border-radius: 8px; }
+    .settings summary::-webkit-details-marker { display: none; }
+    .settings .sum-hint { margin-left: auto; font-size: .8125rem; color: var(--secondary-text-color); text-align: right; }
+    .settings .row:last-child { margin-bottom: 0; }
 
     .bar-wrap { padding: 0 16px; }
     .bar { position: relative; display: flex; gap: 3px; height: 44px; }
@@ -504,6 +589,15 @@
       this._ovrTimer = null;
       this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
       this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
+      // État du repli « Réglages », conservé d'un rendu à l'autre (toggle ne remonte pas : capture).
+      this._settingsOpen = false;
+      this.shadowRoot.addEventListener(
+        "toggle",
+        (e) => {
+          if (e.target.id === "settings" && e.target.isConnected) this._settingsOpen = e.target.open;
+        },
+        true
+      );
     }
 
     static getStubConfig() {
@@ -556,6 +650,13 @@
       this._hass = hass;
       const lang = (hass.locale && hass.locale.language) || hass.language || "en";
       this._lang = String(lang).toLowerCase().startsWith("fr") ? "fr" : "en";
+      // Échelle de couleurs par défaut : dépend du thème clair / sombre de Home Assistant.
+      const dark = !!(hass.themes && hass.themes.darkMode);
+      if (this._dark !== undefined && dark !== this._dark) {
+        this._dark = dark;
+        if (!this._modal) this._render();
+      }
+      this._dark = dark;
       if (!this._unsub && !this._subscribing) this._subscribe();
       this._updateLive();
     }
@@ -641,8 +742,7 @@
 
     // -- rendu -------------------------------------------------------------
     _fmt(t) {
-      const s = Number.isInteger(t) ? String(t) : t.toFixed(1);
-      return this._lang === "fr" ? s.replace(".", ",") : s;
+      return fmtTemp(t, this._lang);
     }
 
     _fmtTime(iso) {
@@ -667,7 +767,17 @@
       const climate = this._climate();
       const current = climate && climate.attributes.current_temperature;
       if (current !== undefined && current !== null) parts.push(`${this._fmt(Number(current))}° ${esc(t.room)}`);
-      if (s.next_change) parts.push(`${esc(t.next)} ${esc(this._fmtTime(s.next_change))}`);
+      const next = upcoming(s.data, s.effective_mode, s.override, new Date());
+      if (next && next.temp !== null) {
+        // Visuel court « 20:30 → 20,5° », phrase complète pour les lecteurs d'écran et au survol.
+        const time = this._fmtTime(next.at.toISOString());
+        const full = t.nextAt.replace("{time}", time).replace("{temp}", `${this._fmt(next.temp)}°`);
+        parts.push(
+          `<span class="next" title="${esc(full)}"><span aria-hidden="true">${esc(time)} → <b>${this._fmt(next.temp)}°</b></span><span class="sr">${esc(full)}</span></span>`
+        );
+      } else if (next) {
+        parts.push(`${esc(t.next)} ${esc(this._fmtTime(next.at.toISOString()))}`);
+      }
       return parts.join(" · ");
     }
 
@@ -835,7 +945,7 @@
       const bar = ivs
         .map((iv) => {
           const w = ((iv.e - iv.s) / 1440) * 100;
-          const c = tempColors(iv.t, this._scale);
+          const c = tempColors(iv.t, this._scale, this._dark);
           return `<div class="seg" style="width:${w}%;--bg:${c.bg};--fg:${c.fg}">${w >= labelMinPct ? this._fmt(iv.t) + "°" : ""}</div>`;
         })
         .join("");
@@ -844,7 +954,7 @@
       const editable = this._canEdit();
       const blocks = ivs
         .map((iv, i) => {
-          const c = tempColors(iv.t, this._scale);
+          const c = tempColors(iv.t, this._scale, this._dark);
           const inner = `<span><span class="range">${toStr(iv.s)} – ${toStr(iv.e)}</span><span class="deg">${this._fmt(iv.t)}°</span></span>`;
           const style = `--accent:${c.accent};--tint:${c.tint}`;
           return editable
@@ -930,7 +1040,7 @@
         const profile = s.data.profiles[this._profile];
         const ro = this._canEdit() ? "" : "disabled";
         const tab = (name) =>
-          `<button class="tab ${this._profile === name ? "on" : ""}" data-action="tab" data-profile="${name}">${esc(t[name])}${s.effective_mode === name ? `<span class="dot" title="${esc(t.activeBadge)}"></span>` : ""}</button>`;
+          `<button class="tab ${this._profile === name ? "on" : ""}" data-action="tab" data-profile="${name}">${esc(t[name === "home" ? "tabHome" : "tabAway"])}${s.effective_mode === name ? `<span class="dot" title="${esc(t.activeBadge)}"></span>` : ""}</button>`;
         const multi = s.zone_count > 1;
         // « Zone absente » : ligne affichée seulement avec l'option show_zone_away.
         const zoneMode = zoneAwayDisplay(this._config, s);
@@ -948,13 +1058,18 @@
           <div class="row"><div><div class="label">${esc(t.manualAway)}</div>${forced}</div>
             <label class="switch"><input type="checkbox" data-action="away-switch" ${s.data.manual_mode === "away" ? "checked" : ""}><span></span></label></div>
           ${zoneAway}
-          <div class="row"><div class="label">${esc(t.layout)}</div>
-            <select data-action="layout" ${ro}>
-              ${["all", "weekday_weekend", "daily"].map((l) => `<option value="${l}" ${profile.layout === l ? "selected" : ""}>${esc(t["layout_" + l])}</option>`).join("")}
-            </select></div>
           ${this._sections(profile.layout).map((sec) => this._sectionHtml(this._profile, sec)).join("")}
-          <div class="row" style="margin-top:12px"><div class="label">${esc(t.enabled)}</div>
-            <label class="switch"><input type="checkbox" data-action="enabled-switch" ${s.data.enabled ? "checked" : ""} ${ro}><span></span></label></div>
+          <details class="settings" id="settings" ${this._settingsOpen ? "open" : ""}>
+            <summary><span class="sec-name">${esc(t.settings)}</span>
+              <span class="sum-hint">${esc(t["layout_" + profile.layout])}${s.data.enabled ? "" : ` · ${esc(t.off)}`}</span>
+              <span class="chev"></span></summary>
+            <div class="row"><label class="label" for="layout-select">${esc(t.layout)}</label>
+              <select id="layout-select" data-action="layout" ${ro}>
+                ${["all", "weekday_weekend", "daily"].map((l) => `<option value="${l}" ${profile.layout === l ? "selected" : ""}>${esc(t["layout_" + l])}</option>`).join("")}
+              </select></div>
+            <div class="row"><div class="label">${esc(t.enabled)}</div>
+              <label class="switch"><input type="checkbox" data-action="enabled-switch" aria-label="${esc(t.enabled)}" ${s.data.enabled ? "checked" : ""} ${ro}><span></span></label></div>
+          </details>
           <div id="save-status" class="status"></div>
           ${ro ? `<div class="status">${esc(t.readOnly)}</div>` : ""}`;
       }
@@ -1112,7 +1227,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);
