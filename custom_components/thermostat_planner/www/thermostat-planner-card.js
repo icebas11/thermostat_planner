@@ -90,6 +90,41 @@
       nextShort: "{temp} à {time}",
       inDur: "dans {d}",
       untilT: "{temp} jusqu'à {time}",
+      dayAria: "Historique du jour",
+      dayPrev: "Jour précédent",
+      dayNext: "Jour suivant",
+      nowAt: "il est {time}",
+      histLoading: "Chargement de l'historique…",
+      histError: "Historique indisponible",
+      histEmpty: "Aucune température enregistrée ce jour-là : le thermostat est peut-être exclu du recorder, ou ce jour a été purgé.",
+      histNoMeas: "Le thermostat n'enregistre pas de température mesurée (attribut current_temperature).",
+      planGuess: "Consigne passée reconstituée d'après le planning actuel : capteur Consigne introuvable ou sans historique.",
+      chartAria: "{day} : consigne prévue et température mesurée. Détail dans le tableau des valeurs.",
+      lgMeas: "mesurée",
+      lgPlan: "prévue",
+      lgLag: "retard de chauffe",
+      lgHeat: "chauffe",
+      tipRoom: "pièce",
+      tipPlan: "prévu",
+      tipHeatOn: "chauffe en cours",
+      tipHeatOff: "chauffe à l'arrêt",
+      reachTime: "pour atteindre {temp} à partir de {time}",
+      notReached: "non atteinte",
+      notReachedSub: "{temp} demandés depuis {time}",
+      noRise: "aucune hausse de consigne ce jour-là",
+      heatToday: "de chauffe depuis minuit",
+      heatDay: "de chauffe sur la journée",
+      devSince: "écart moyen à la consigne depuis {time}",
+      devMidnight: "écart moyen à la consigne depuis minuit",
+      devDay: "écart moyen à la consigne sur la journée",
+      devNone: "écart moyen : consigne pas encore atteinte",
+      showValues: "Voir les valeurs",
+      hideValues: "Masquer les valeurs",
+      tblCaption: "Valeurs heure par heure, {day}",
+      thTime: "Heure",
+      thRoom: "Pièce",
+      thPlan: "Prévue",
+      thHeat: "Chauffe (min)",
     },
     en: {
       title: "Heating schedule",
@@ -170,6 +205,41 @@
       nextShort: "{temp} at {time}",
       inDur: "in {d}",
       untilT: "{temp} until {time}",
+      dayAria: "Day history",
+      dayPrev: "Previous day",
+      dayNext: "Next day",
+      nowAt: "now {time}",
+      histLoading: "Loading history…",
+      histError: "History unavailable",
+      histEmpty: "No temperature recorded that day: the thermostat may be excluded from the recorder, or the day was purged.",
+      histNoMeas: "The thermostat does not record a measured temperature (current_temperature attribute).",
+      planGuess: "Past target rebuilt from the current schedule: Target sensor not found or without history.",
+      chartAria: "{day}: planned target and measured temperature. Details in the values table.",
+      lgMeas: "measured",
+      lgPlan: "planned",
+      lgLag: "heating delay",
+      lgHeat: "heating",
+      tipRoom: "room",
+      tipPlan: "planned",
+      tipHeatOn: "heating",
+      tipHeatOff: "heating off",
+      reachTime: "to reach {temp} from {time}",
+      notReached: "not reached",
+      notReachedSub: "{temp} requested since {time}",
+      noRise: "no target increase that day",
+      heatToday: "of heating since midnight",
+      heatDay: "of heating over the day",
+      devSince: "average gap to target since {time}",
+      devMidnight: "average gap to target since midnight",
+      devDay: "average gap to target over the day",
+      devNone: "average gap: target not reached yet",
+      showValues: "Show values",
+      hideValues: "Hide values",
+      tblCaption: "Hourly values, {day}",
+      thTime: "Time",
+      thRoom: "Room",
+      thPlan: "Planned",
+      thHeat: "Heating (min)",
     },
   };
 
@@ -702,6 +772,314 @@
       .join("");
   }
 
+  // ---- Panneau du jour : historique (fonctions pures) ---------------------
+  // Minutes depuis le début du jour affiché ; une série est une liste d'intervalles { s, e, v }.
+  const HIST_DEFAULT_DAYS = 10; // purge par défaut du recorder
+  const REACH_TOL = 0.15; // consigne « atteinte » à 0,15 °C près (arrondis des thermostats)
+
+  /** Option history_days : jours consultables, aujourd'hui compris (10 par défaut). */
+  function historyDays(config) {
+    const v = config && config.history_days;
+    if (v === undefined || v === null || v === "") return HIST_DEFAULT_DAYS;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1 || n > 365)
+      throw new Error("thermostat-planner-card: history_days doit être un entier de 1 à 365");
+    return n;
+  }
+
+  /**
+   * Capteur « Consigne » de la zone, d'après le registre d'entités du frontend (hass.entities,
+   * hass.devices) : plateforme thermostat_planner, clé de traduction "target", appareil rattaché
+   * à l'entrée `entryId`. À défaut d'appareil identifiable, l'unique capteur de ce type. Sinon null.
+   */
+  function findTargetSensor(entities, devices, entryId) {
+    const targets = Object.values(entities || {}).filter(
+      (e) => e && e.platform === "thermostat_planner" && e.translation_key === "target" && String(e.entity_id).startsWith("sensor.")
+    );
+    const mine = targets.filter((e) => {
+      const d = devices && e.device_id && devices[e.device_id];
+      return d && Array.isArray(d.config_entries) && d.config_entries.includes(entryId);
+    });
+    if (mine.length === 1) return mine[0].entity_id;
+    if (!mine.length && targets.length === 1) return targets[0].entity_id;
+    return null;
+  }
+
+  /**
+   * États d'une entité renvoyés par history/history_during_period → [{ at (ms), s, a }] triés.
+   * Format compressé ({ s, a, lu, lc }, secondes) ou complet ({ state, attributes, last_updated }) ;
+   * un état sans attributs (minimal_response) reprend ceux du précédent.
+   */
+  function histStates(list) {
+    let attrs = {};
+    return (Array.isArray(list) ? list : [])
+      .map((x) => ({
+        at:
+          x.lu !== undefined ? Number(x.lu) * 1000 : x.lc !== undefined ? Number(x.lc) * 1000 : Date.parse(x.last_updated || x.last_changed),
+        s: x.s !== undefined ? x.s : x.state,
+        a: x.a || x.attributes,
+      }))
+      .filter((x) => Number.isFinite(x.at))
+      .sort((p, q) => p.at - q.at)
+      .map((x) => {
+        if (x.a) attrs = x.a;
+        return { at: x.at, s: x.s, a: x.a || attrs };
+      });
+  }
+
+  const isUp = (s) => s !== "unavailable" && s !== "unknown" && s !== undefined && s !== null;
+  const numOrNull = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+
+  /** Ajoute { s, e, v } à une série en fusionnant avec le précédent s'il est contigu et de même valeur. */
+  function pushStep(out, s, e, v) {
+    if (e <= s) return;
+    const last = out[out.length - 1];
+    if (last && last.v === v && Math.abs(last.e - s) < 1e-6) last.e = e;
+    else out.push({ s, e, v });
+  }
+
+  /** États → série { s, e, v } bornée à [0, upto] ; `pick(état)` donne la valeur (null : trou). */
+  function holdSteps(states, start, upto, pick) {
+    const out = [];
+    states.forEach((x, i) => {
+      const s = Math.max(0, (x.at - start) / 60000);
+      const e = Math.min(upto, i < states.length - 1 ? (states[i + 1].at - start) / 60000 : upto);
+      pushStep(out, s, e, pick(x));
+    });
+    return out;
+  }
+
+  /** Valeur d'une série à la minute m (null hors série ou dans un trou). */
+  function valueAt(steps, m) {
+    for (let i = 0; i < steps.length; i++) {
+      const g = steps[i];
+      if (m >= g.s && (m < g.e || (i === steps.length - 1 && m === g.e))) return g.v;
+    }
+    return null;
+  }
+
+  /** Moyenne par tranches de `bucket` minutes (pondérée par la durée) ; tranche à moitié vide : null. */
+  function resample(steps, bucket) {
+    const out = [];
+    if (!steps.length) return out;
+    const end = steps[steps.length - 1].e;
+    let j = 0;
+    for (let b = Math.floor(steps[0].s / bucket) * bucket; b < end; b += bucket) {
+      const s0 = Math.max(b, steps[0].s);
+      const be = Math.min(end, b + bucket);
+      let sum = 0;
+      let w = 0;
+      while (j < steps.length && steps[j].e <= b) j++;
+      for (let k = j; k < steps.length && steps[k].s < be; k++) {
+        const g = steps[k];
+        const o = Math.min(be, g.e) - Math.max(b, g.s);
+        if (g.v !== null && o > 0) {
+          sum += g.v * o;
+          w += o;
+        }
+      }
+      pushStep(out, s0, be, w > 0 && w >= (be - s0) / 2 ? Math.round((sum / w) * 100) / 100 : null);
+    }
+    return out;
+  }
+
+  /**
+   * Série mesurée → tracés [[[m, t], …], …] (un par portion sans trou). Un palier long garde sa
+   * valeur jusqu'à `ramp` minutes avant le suivant : la courbe ne « glisse » pas sur des heures.
+   */
+  function measRuns(steps, ramp = 10) {
+    const runs = [];
+    let cur = null;
+    steps.forEach((g, i) => {
+      if (g.v === null) {
+        cur = null;
+        return;
+      }
+      if (!cur) runs.push((cur = []));
+      cur.push([g.s, g.v]);
+      const next = steps[i + 1];
+      const ends = !next || next.v === null || Math.abs(next.s - g.e) > 1e-6;
+      if (ends) {
+        cur.push([g.e, g.v]);
+        cur = null;
+      } else if (g.e - g.s > 2 * ramp) cur.push([g.e - ramp, g.v]);
+    });
+    return runs;
+  }
+
+  /** Tracé SVG lissé (cubique monotone : pas de dépassement entre deux points) de points [x, y]. */
+  function smoothPath(P) {
+    const f = (v) => (Math.round(v * 10) / 10).toString();
+    const n = P.length;
+    if (!n) return "";
+    let d = `M${f(P[0][0])},${f(P[0][1])}`;
+    if (n === 1) return d;
+    const dx = [];
+    const sl = [];
+    for (let i = 0; i < n - 1; i++) {
+      dx[i] = P[i + 1][0] - P[i][0];
+      sl[i] = dx[i] ? (P[i + 1][1] - P[i][1]) / dx[i] : 0;
+    }
+    const tg = [sl[0]];
+    for (let i = 1; i < n - 1; i++) {
+      tg[i] =
+        sl[i - 1] * sl[i] <= 0 || !dx[i - 1] || !dx[i]
+          ? 0
+          : (3 * (dx[i - 1] + dx[i])) / ((2 * dx[i] + dx[i - 1]) / sl[i - 1] + (dx[i] + 2 * dx[i - 1]) / sl[i]);
+    }
+    tg[n - 1] = sl[n - 2];
+    for (let i = 0; i < n - 1; i++) {
+      const h = dx[i] / 3;
+      d += ` C${f(P[i][0] + h)},${f(P[i][1] + tg[i] * h)} ${f(P[i + 1][0] - h)},${f(P[i + 1][1] - tg[i + 1] * h)} ${f(P[i + 1][0])},${f(P[i + 1][1])}`;
+    }
+    return d;
+  }
+
+  /**
+   * Retards de chauffe : à chaque hausse de consigne avant `upto`, du début de la plage au moment
+   * où la pièce l'atteint (à `tol` près). [{ s, e, t, from, reached }] ; reached false : pas encore
+   * (ou jamais) atteinte avant la fin de la plage. Pièce déjà à la consigne : e = s. Sans mesure : ignorée.
+   */
+  function heatLags(plan, meas, upto, tol = REACH_TOL) {
+    const out = [];
+    for (let i = 1; i < plan.length; i++) {
+      const p = plan[i];
+      const q = plan[i - 1];
+      if (p.s >= upto || p.v === null || q.v === null || p.v <= q.v || Math.abs(q.e - p.s) > 1e-6) continue;
+      const before = valueAt(meas, p.s);
+      if (before === null) continue;
+      const goal = p.v - tol;
+      const limit = Math.min(p.e, upto);
+      let hit = before >= goal ? p.s : null;
+      for (let k = 0; hit === null && k < meas.length; k++) {
+        const g = meas[k];
+        if (g.e > p.s && g.s < limit && g.v !== null && g.v >= goal) hit = Math.max(g.s, p.s);
+      }
+      out.push({ s: p.s, e: hit === null ? limit : hit, t: p.v, from: q.v, reached: hit !== null });
+    }
+    return out;
+  }
+
+  /** Minutes de chauffe dans [a, b[. */
+  const heatIn = (heat, a, b) => heat.reduce((n, g) => n + Math.max(0, Math.min(b, g.e) - Math.max(a, g.s)), 0);
+
+  /** Écart moyen (mesure − consigne) pondéré par la durée sur [a, b], ou null (moins de 10 min de données). */
+  function meanDeviation(meas, plan, a, b) {
+    const cuts = new Set([a, b]);
+    meas.concat(plan).forEach((g) => [g.s, g.e].forEach((m) => m > a && m < b && cuts.add(m)));
+    const pts = [...cuts].sort((x, y) => x - y);
+    let sum = 0;
+    let w = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const mid = (pts[i] + pts[i + 1]) / 2;
+      const r = valueAt(meas, mid);
+      const c = valueAt(plan, mid);
+      if (r === null || c === null) continue;
+      sum += (r - c) * (pts[i + 1] - pts[i]);
+      w += pts[i + 1] - pts[i];
+    }
+    return w >= 10 ? sum / w : null;
+  }
+
+  /** Échelle des degrés du graphique : bornes entières autour des valeurs, au moins 3 °C d'amplitude. */
+  function niceScale(values) {
+    const v = values.filter((x) => typeof x === "number" && Number.isFinite(x));
+    if (!v.length) return { lo: 16, hi: 21, step: 1 };
+    let lo = Math.floor(Math.min(...v) - 0.3);
+    let hi = Math.ceil(Math.max(...v) + 0.3);
+    if (hi - lo < 3) {
+      lo = Math.floor((lo + hi) / 2 - 1.5);
+      hi = lo + 3;
+    }
+    const step = hi - lo > 8 ? 2 : 1;
+    if (step === 2) {
+      lo = Math.floor(lo / 2) * 2;
+      hi = Math.ceil(hi / 2) * 2;
+    }
+    return { lo, hi, step };
+  }
+
+  /**
+   * Modèle du jour affiché, à partir de l'historique :
+   * - climate / target : listes d'états de l'entité climate et du capteur Consigne (ou null) ;
+   * - start / end : bornes du jour (ms) ; now : instant présent (ms) si c'est aujourd'hui, sinon null ;
+   * - future : consigne à venir [{ s, e, v }] (planning, à partir de now) ;
+   * - schedule : consigne du jour d'après le planning, utilisée si le capteur n'a pas d'historique.
+   * Renvoie { len, upto, now, meas, runs, heat (null sans hvac_action), plan, planFromSchedule,
+   * lags, last, stats: { lag, heat, dev, devFrom }, scale }.
+   */
+  function dayModel({ climate, target, start, end, now = null, future = [], schedule = [] }) {
+    const len = (end - start) / 60000;
+    const today = now !== null && now >= start && now < end;
+    const upto = today ? (now - start) / 60000 : len;
+    const cs = histStates(climate);
+    let meas = holdSteps(cs, start, upto, (x) => (isUp(x.s) ? numOrNull(x.a.current_temperature) : null));
+    if (meas.length > len / 5) meas = resample(meas, 5);
+    const hasAction = cs.some((x) => isUp(x.s) && x.a.hvac_action !== undefined && x.a.hvac_action !== null);
+    const heat = hasAction
+      ? holdSteps(cs, start, upto, (x) => isUp(x.s) && x.a.hvac_action === "heating").filter((g) => g.v)
+      : null;
+
+    let plan = holdSteps(histStates(target), start, upto, (x) => (isUp(x.s) ? numOrNull(x.s) : null));
+    const planFromSchedule = !plan.some((g) => g.v !== null);
+    if (planFromSchedule) {
+      plan = [];
+      schedule.forEach((g) => pushStep(plan, Math.max(0, g.s), Math.min(upto, g.e), g.v));
+    }
+    if (today) future.forEach((g) => pushStep(plan, Math.max(upto, g.s), Math.min(len, g.e), g.v));
+
+    const lags = heatLags(plan, meas, upto);
+    const lag = lags.length ? lags[lags.length - 1] : null;
+    const devFrom = lag ? (lag.reached ? lag.e : null) : 0;
+    const known = meas.filter((g) => g.v !== null);
+    const lastStep = known[known.length - 1];
+    const vals = known.map((g) => g.v).concat(plan.map((g) => g.v));
+    return {
+      len,
+      upto,
+      now: today ? upto : null,
+      meas,
+      runs: measRuns(meas),
+      heat,
+      plan,
+      planFromSchedule,
+      lags,
+      last: lastStep ? { m: lastStep.e, t: lastStep.v } : null,
+      stats: {
+        lag,
+        heat: heat ? heatIn(heat, 0, upto) : null,
+        dev: devFrom === null ? null : meanDeviation(meas, plan, devFrom, upto),
+        devFrom,
+      },
+      scale: niceScale(vals),
+    };
+  }
+
+  /** Valeurs à la minute m (bulle du graphique) : { room, plan, heating } (null : inconnu). */
+  function pointAt(model, m) {
+    const past = m <= model.upto;
+    return {
+      room: past ? valueAt(model.meas, m) : null,
+      plan: valueAt(model.plan, m),
+      heating: past && model.heat ? model.heat.some((g) => m >= g.s && m < g.e) : null,
+    };
+  }
+
+  /** Tableau des valeurs, toutes les `step` minutes : [{ m, room, plan, heat (min de chauffe dans la tranche) }]. */
+  function valueRows(model, step = 60) {
+    const rows = [];
+    for (let m = 0; m < model.len; m += step) {
+      const p = pointAt(model, m);
+      rows.push({
+        m,
+        room: p.room,
+        plan: p.plan,
+        heat: model.heat && m < model.upto ? Math.round(heatIn(model.heat, m, Math.min(m + step, model.upto))) : null,
+      });
+    }
+    return rows;
+  }
+
   // ---- Styles -----------------------------------------------------------
   const STYLE = `
     :host { display: block; }
@@ -793,6 +1171,51 @@
     .waxis span:first-child { transform: none; }
     .waxis span:last-child { transform: translateX(-100%); }
     .pick { margin-top: 8px; text-align: center; font-size: .8125rem; color: var(--secondary-text-color); }
+
+    /* Panneau du jour : consigne prévue, température mesurée, chauffe (historique). */
+    .day { --heat: var(--state-climate-heat-color, #ff8100); margin-top: 10px; }
+    .dayhead { display: flex; align-items: center; gap: 2px; min-height: 44px; }
+    .nav { flex: none; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent;
+      color: var(--primary-text-color); font-size: 1.5rem; line-height: 1; display: flex; align-items: center; justify-content: center; }
+    .nav:hover:not([disabled]) { background: var(--secondary-background-color); }
+    .nav[disabled] { opacity: .35; cursor: default; }
+    .dname { min-width: 0; margin: 0 4px; font-size: 1rem; font-weight: 500; color: var(--primary-text-color); }
+    .dnow { margin-left: auto; padding-left: 8px; font-size: .8125rem; color: var(--secondary-text-color);
+      font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .hmsg { padding: 8px 0; font-size: .8125rem; color: var(--secondary-text-color); }
+    .plot { position: relative; margin-top: 2px; }
+    .plot > svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; user-select: none; }
+    .plot text { font-family: inherit; font-size: 10px; fill: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+    .plot text.pl { font-weight: 500; }
+    .plot text.nowv { font-size: 11px; font-weight: 700; fill: var(--primary-text-color);
+      stroke: var(--card-background-color, #fff); stroke-width: 4px; paint-order: stroke; }
+    .plot text.pill { font-weight: 700; fill: rgba(0,0,0,.85); }
+    .tip { position: absolute; z-index: 2; padding: 8px 10px; border-radius: 10px; font-size: .75rem; line-height: 1.45;
+      pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums;
+      background: var(--card-background-color, #fff); color: var(--primary-text-color);
+      border: 1px solid var(--divider-color); box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+    .tip[hidden] { display: none; }
+    .tip .h { font-weight: 500; margin-bottom: 2px; }
+    .tip b { font-weight: 600; }
+    .k { display: inline-block; margin-right: 6px; vertical-align: middle; flex: none; }
+    .lg { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: .75rem; color: var(--secondary-text-color); }
+    .lg span { display: inline-flex; align-items: center; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin-top: 12px; }
+    .tiles div { padding: 10px; border-radius: 10px; background: var(--secondary-background-color); font-size: .75rem;
+      line-height: 1.3; color: var(--secondary-text-color); }
+    .tiles b { display: block; margin-bottom: 2px; font-size: 1.125rem; font-weight: 400; color: var(--primary-text-color);
+      font-variant-numeric: tabular-nums; }
+    .tablelink { margin-top: 4px; }
+    .tablelink button { min-height: 44px; padding: 0; border: 0; background: none; color: var(--primary-color);
+      font-size: .8125rem; text-decoration: underline; text-underline-offset: 2px; }
+    .vals { max-height: 320px; overflow: auto; border: 1px solid var(--divider-color); border-radius: 10px; }
+    .vals table { width: 100%; border-collapse: collapse; font-size: .8125rem; font-variant-numeric: tabular-nums; }
+    .vals caption { padding: 8px 10px; text-align: left; font-weight: 500; color: var(--primary-text-color); }
+    .vals th, .vals td { padding: 6px 10px; text-align: right; border-top: 1px solid var(--divider-color); }
+    .vals th:first-child, .vals td:first-child { text-align: left; }
+    .vals thead th { position: sticky; top: 0; background: var(--card-background-color, #fff); font-weight: 500;
+      color: var(--secondary-text-color); }
+    .vals td { color: var(--primary-text-color); }
 
     /* Éditeur du jour sélectionné. */
     .editor { margin-top: 10px; padding: 12px; border-radius: 14px; background: var(--secondary-background-color); }
@@ -936,7 +1359,19 @@
       this._subscribing = false;
       this._ovrValue = null; // consigne choisie avec ± pas encore envoyée
       this._ovrTimer = null;
+      // Panneau du jour : jour affiché (0 = aujourd'hui, 1 = hier…), historique par jour, tableau ouvert.
+      this._dayOff = 0;
+      this._hist = {};
+      this._tableOpen = false;
+      this._model = null;
       this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
+      // Bulle du graphique : souris et toucher (pan-y laisse défiler la page verticalement).
+      ["pointermove", "pointerdown"].forEach((type) => this.shadowRoot.addEventListener(type, (e) => this._onPlotPointer(e)));
+      this.shadowRoot.addEventListener("pointerout", (e) => {
+        const plot = e.target.closest && e.target.closest(".plot");
+        if (plot && e.pointerType === "mouse" && !(e.relatedTarget && plot.contains(e.relatedTarget))) this._hideTip();
+      });
+      this.shadowRoot.addEventListener("pointercancel", () => this._hideTip());
       this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
       this.shadowRoot.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && this._modal) this._closeModal();
@@ -958,6 +1393,8 @@
     setConfig(config) {
       this._scale = parseScale(config && config.colors);
       this._palette = paletteOf(config);
+      this._histDays = historyDays(config);
+      if (this._dayOff > this._histDays - 1) this._dayOff = 0;
       const target = targetOf(config);
       const changed = this._target !== undefined && JSON.stringify(target) !== JSON.stringify(this._target);
       this._target = target;
@@ -973,6 +1410,8 @@
         }
         this._state = null;
         this._loadError = false;
+        this._hist = {};
+        this._dayOff = 0;
         if (this._hass && !this._subscribing) this._subscribe();
       }
       this._render();
@@ -1035,7 +1474,10 @@
       if (this._ro) this._ro.observe(this);
       // Compte à rebours de la dérogation et prochain changement.
       clearInterval(this._clock);
-      this._clock = setInterval(() => this._updateLive(), 30000);
+      this._clock = setInterval(() => {
+        this._updateLive();
+        this._tickDay();
+      }, 30000);
     }
 
     disconnectedCallback() {
@@ -1607,6 +2049,7 @@
           ${awayControls}
           ${editable ? "" : `<div class="ro-note"><ha-icon icon="mdi:lock-outline"></ha-icon><span>${esc(t.readOnly)}</span></div>`}
           ${this._weekHtml(this._profile, selKey)}
+          ${this._dayShown(selKey) ? `<section class="day" id="day-panel" aria-label="${esc(t.dayAria)}">${this._dayPanelInner()}</section>` : ""}
           ${selKey ? this._editorHtml(this._profile, selKey) : `<div class="pick">${esc(editable ? t.pickDay : t.pickDayRo)}</div>`}
           <details class="settings" id="settings" ${this._settingsOpen ? "open" : ""}>
             <summary><span class="sum-name">${esc(t.settings)}</span>
@@ -1628,6 +2071,7 @@
         </ha-card>${this._modalHtml()}`;
       this._updateLive();
       this._updateSaveStatus();
+      this._ensureDay();
 
       const root = this.shadowRoot;
       if (this._modal) {
@@ -1638,6 +2082,370 @@
         const el = root.querySelector(focus);
         if (el) el.focus();
       }
+    }
+
+    // -- panneau du jour (historique) ------------------------------------------
+    /** Panneau affiché : option show_history, ligne d'aujourd'hui sélectionnée, onglet du mode actif. */
+    _dayShown(selKey) {
+      const s = this._state;
+      if (!s || !selKey || (this._config && this._config.show_history === false)) return false;
+      if (!this._hass || typeof this._hass.callWS !== "function" || this._profile !== s.effective_mode) return false;
+      return gridRows(s.data.profiles[this._profile].layout, weekdayOf(new Date())).some((r) => r.key === selKey && r.today);
+    }
+
+    /** Jour affiché : { off, start, end, key } (bornes à minuit, heure locale). */
+    _dayInfo() {
+      const n = new Date();
+      const start = new Date(n.getFullYear(), n.getMonth(), n.getDate() - this._dayOff);
+      const end = new Date(n.getFullYear(), n.getMonth(), n.getDate() - this._dayOff + 1);
+      return { off: this._dayOff, start, end, key: `${start.getFullYear()}-${start.getMonth() + 1}-${start.getDate()}` };
+    }
+
+    /** Capteur « Consigne » de la zone (registre d'entités du frontend), ou null. */
+    _targetSensor() {
+      const h = this._hass;
+      return h && this._state ? findTargetSensor(h.entities, h.devices, this._state.entry_id) : null;
+    }
+
+    /** Charge l'historique du jour affiché s'il manque ; aujourd'hui (ou après une erreur) : toutes les 5 min. */
+    _ensureDay() {
+      if (!this.shadowRoot.getElementById("day-panel")) return;
+      const info = this._dayInfo();
+      const h = this._hist[info.key];
+      if (h && (h.loading || Date.now() - h.at < 300000 || (info.off > 0 && !h.error))) return;
+      this._fetchDay(info);
+    }
+
+    async _fetchDay(info) {
+      const climate = this._state.climate_entity;
+      const target = this._targetSensor();
+      const prev = this._hist[info.key] || {};
+      this._hist[info.key] = { ...prev, loading: true };
+      const today = info.off === 0;
+      let entry;
+      try {
+        const res = await this._hass.callWS({
+          type: "history/history_during_period",
+          start_time: info.start.toISOString(),
+          end_time: (today ? new Date() : info.end).toISOString(),
+          entity_ids: [climate, target].filter(Boolean),
+          include_start_time_state: true,
+          significant_changes_only: false,
+          minimal_response: false,
+          no_attributes: false,
+        });
+        entry = { climate: (res && res[climate]) || [], target: target ? (res && res[target]) || [] : null, at: Date.now() };
+      } catch (err) {
+        entry = { ...prev, error: (err && err.message) || true, at: Date.now() };
+      }
+      this._hist[info.key] = entry;
+      if (this._dayInfo().key === info.key) this._updateDayPanel();
+    }
+
+    /** Horloge (30 s) : « il est 14:40 » et rafraîchissement de l'historique du jour. */
+    _tickDay() {
+      const el = this.shadowRoot.getElementById("day-now");
+      if (el && this._dayOff === 0) el.textContent = this.t.nowAt.replace("{time}", this._fmtTime(new Date().toISOString()));
+      this._ensureDay();
+    }
+
+    /** Redessine le panneau seul (sans rendu complet), en gardant le focus. */
+    _updateDayPanel(focusAction) {
+      const el = this.shadowRoot.getElementById("day-panel");
+      if (!el) return;
+      const active = this.shadowRoot.activeElement;
+      const sel = focusAction ? `[data-action="${focusAction}"]` : active && el.contains(active) ? focusSelector(active) : null;
+      el.innerHTML = this._dayPanelInner();
+      if (!sel) return;
+      let target = el.querySelector(sel);
+      if (!target || target.disabled) {
+        // Bout de l'historique atteint : le focus passe à l'autre flèche.
+        const other = { "day-prev": "day-next", "day-next": "day-prev" }[focusAction];
+        target = other ? el.querySelector(`[data-action="${other}"]`) : null;
+      }
+      if (target && !target.disabled) target.focus();
+    }
+
+    /** Modèle du jour : historique + consigne à venir (et repli sur le planning) du mode actif. */
+    _buildModel(info, h) {
+      const s = this._state;
+      const now = new Date();
+      const today = info.off === 0;
+      const steps = (pieces, base) => pieces.map((p) => ({ s: base + p.start, e: base + p.end, v: p.temp }));
+      const nowMin = (now - info.start) / 60000;
+      return dayModel({
+        climate: h.climate,
+        target: h.target,
+        start: info.start.getTime(),
+        end: info.end.getTime(),
+        now: today ? now.getTime() : null,
+        future: today ? steps(ribbon(s.data, s.effective_mode, s.override, now, (info.end - now) / 3600000), nowMin) : [],
+        schedule: steps(ribbon(s.data, s.effective_mode, null, info.start, (info.end - info.start) / 3600000), 0),
+      });
+    }
+
+    _dayName(date) {
+      const name = date.toLocaleDateString(this._lang === "fr" ? "fr-FR" : "en-GB", { weekday: "long", day: "numeric", month: "short" });
+      return name.charAt(0).toUpperCase() + name.slice(1);
+    }
+
+    /** Contenu du panneau : en-tête ‹ jour ›, graphique, légende, trois chiffres, tableau des valeurs. */
+    _dayPanelInner() {
+      const t = this.t;
+      const info = this._dayInfo();
+      const h = this._hist[info.key];
+      const name = this._dayName(info.start);
+      const today = info.off === 0;
+      const head = `<div class="dayhead">
+          <button class="nav" data-action="day-prev" aria-label="${esc(t.dayPrev)}" ${info.off >= this._histDays - 1 ? "disabled" : ""}><span aria-hidden="true">‹</span></button>
+          <span class="dname" aria-live="polite">${esc(name)}</span>
+          <button class="nav" data-action="day-next" aria-label="${esc(t.dayNext)}" ${today ? "disabled" : ""}><span aria-hidden="true">›</span></button>
+          <span class="dnow" id="day-now">${today ? esc(t.nowAt.replace("{time}", this._fmtTime(new Date().toISOString()))) : ""}</span>
+        </div>`;
+      this._model = null;
+      if (!h || (h.climate === undefined && !h.error)) return `${head}<div class="hmsg" role="status">${esc(t.histLoading)}</div>`;
+      if (h.climate === undefined)
+        return `${head}<div class="hmsg" role="alert">${esc(t.histError)}${h.error !== true ? ` (${esc(h.error)})` : ""}</div>`;
+
+      const model = this._buildModel(info, h);
+      const start = info.start.getTime();
+      const at = (m) => this._fmtTime(new Date(start + m * 60000).toISOString());
+      const hasMeas = model.runs.length > 0;
+      const hasPlan = model.plan.some((g) => g.v !== null);
+      const notes = [];
+      if (!hasMeas) notes.push(h.climate.length ? t.histNoMeas : t.histEmpty);
+      if (hasPlan && model.planFromSchedule) notes.push(t.planGuess);
+      const noteHtml = notes.map((n) => `<div class="hmsg">${esc(n)}</div>`).join("");
+      if (!hasMeas && !hasPlan) return head + noteHtml;
+      this._model = model;
+      this._modelStart = start;
+
+      const svg = this._chartSvg(model, name);
+      const planColor = tempColors(Math.max(...model.plan.filter((g) => g.v !== null).map((g) => g.v)), this._scale, this._dark, this._palette).bg;
+      const hasLag = model.lags.some((l) => l.e - l.s >= 3);
+      const sw = (inner, w = 18, hh = 10) => `<svg class="k" width="${w}" height="${hh}" aria-hidden="true">${inner}</svg>`;
+      const legend = [
+        hasMeas ? sw('<line x1="0" x2="18" y1="5" y2="5" stroke="currentColor" stroke-width="2.25"/>') + esc(t.lgMeas) : "",
+        sw(`<line x1="3" x2="15" y1="5" y2="5" stroke="${planColor}" stroke-width="5" stroke-linecap="round"/>`) + esc(t.lgPlan),
+        hasLag ? sw('<rect width="14" height="10" rx="2" fill="var(--heat)" opacity=".3"/>', 14) + esc(t.lgLag) : "",
+        model.heat ? sw('<rect y="1" width="14" height="8" rx="3" fill="var(--heat)"/>', 14) + esc(t.lgHeat) : "",
+      ]
+        .filter(Boolean)
+        .map((x) => `<span>${x}</span>`)
+        .join("");
+
+      let tiles = "";
+      if (hasMeas) {
+        const st = model.stats;
+        const tile = (big, small) => `<div><b>${esc(big)}</b>${esc(small)}</div>`;
+        const deg = (v) => `${this._fmt(v)}°`;
+        const list = [];
+        if (!st.lag) list.push(tile("—", t.noRise));
+        else if (st.lag.reached)
+          list.push(tile(fmtDuration(st.lag.e - st.lag.s, this._lang), t.reachTime.replace("{temp}", deg(st.lag.t)).replace("{time}", at(st.lag.s))));
+        else list.push(tile(t.notReached, t.notReachedSub.replace("{temp}", deg(st.lag.t)).replace("{time}", at(st.lag.s))));
+        if (st.heat !== null) list.push(tile(fmtDuration(st.heat, this._lang), today ? t.heatToday : t.heatDay));
+        if (st.devFrom === null) list.push(tile("—", t.devNone));
+        else {
+          const r = st.dev === null ? null : Math.round(st.dev * 10) / 10;
+          const big = r === null ? "—" : r === 0 ? "0°" : `${r > 0 ? "+" : "−"}${this._fmt(Math.abs(r))}°`;
+          list.push(tile(big, st.devFrom === 0 ? (today ? t.devMidnight : t.devDay) : t.devSince.replace("{time}", at(st.devFrom))));
+        }
+        tiles = `<div class="tiles">${list.join("")}</div>`;
+      }
+
+      let table = "";
+      if (this._tableOpen) {
+        const v = (x) => (x === null || x === undefined ? "—" : `${this._fmt(x)}°`);
+        const rows = valueRows(model, 60)
+          .map(
+            (r) =>
+              `<tr><th scope="row">${esc(at(r.m))}</th><td>${v(r.room)}</td><td>${v(r.plan)}</td>${model.heat ? `<td>${r.heat === null ? "—" : r.heat}</td>` : ""}</tr>`
+          )
+          .join("");
+        table = `<div class="vals" id="day-values" tabindex="0" role="region" aria-label="${esc(t.tblCaption.replace("{day}", name))}"><table>
+            <caption>${esc(t.tblCaption.replace("{day}", name))}</caption>
+            <thead><tr><th scope="col">${esc(t.thTime)}</th><th scope="col">${esc(t.thRoom)}</th><th scope="col">${esc(t.thPlan)}</th>${model.heat ? `<th scope="col">${esc(t.thHeat)}</th>` : ""}</tr></thead>
+            <tbody>${rows}</tbody></table></div>`;
+      }
+      return `${head}${noteHtml}
+        <div class="plot">${svg}<div class="tip" id="day-tip" hidden></div></div>
+        <div class="lg">${legend}</div>
+        ${tiles}
+        <div class="tablelink"><button type="button" data-action="day-table" aria-expanded="${this._tableOpen}" aria-controls="day-values">${esc(this._tableOpen ? t.hideValues : t.showValues)}</button></div>
+        ${table}`;
+    }
+
+    /** Graphique SVG du jour, à la largeur réelle de la carte (textes à leur taille). */
+    _chartSvg(model, name) {
+      const t = this.t;
+      const W = Math.max(280, (this._width || 400) - 32);
+      const L = 34;
+      const R = 12;
+      const T = 16;
+      const PH = 150;
+      const GAP = 10;
+      const LANE = 14;
+      const AX = 18;
+      const lane = !!model.heat;
+      const ly = T + PH + GAP;
+      const H = T + PH + (lane ? GAP + LANE : 0) + AX + 4;
+      const { lo, hi, step } = model.scale;
+      const pw = W - L - R;
+      const r1 = (v) => Math.round(v * 10) / 10;
+      const x = (m) => r1(L + (m / model.len) * pw);
+      const y = (v) => r1(T + (1 - (v - lo) / (hi - lo)) * PH);
+      const nowM = model.now === null ? model.len : model.now;
+      this._geo = { W, H, L, pw, T, PH, x, y };
+
+      let grid = "";
+      for (let v = lo; v <= hi; v += step)
+        grid += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--divider-color)"/><text x="${L - 6}" y="${y(v) + 3.5}" text-anchor="end">${v}°</text>`;
+      const hStep = pw >= 480 ? 3 : 6;
+      for (let hh = 0; hh <= 24; hh += hStep) {
+        const m = Math.min(model.len, hh * 60);
+        grid += `<text x="${x(m)}" y="${H - 4}" text-anchor="${hh === 0 ? "start" : hh === 24 ? "end" : "middle"}">${hh}:00</text>`;
+      }
+
+      // Consigne : un trait épais par plage dans sa couleur, bordé de sa teinte contrastée (visible sur le fond), futur estompé.
+      let plan = "";
+      model.plan.forEach((g, i) => {
+        if (g.v === null) return;
+        const col = tempColors(g.v, this._scale, this._dark, this._palette);
+        const c = col.bg;
+        const prev = model.plan[i - 1];
+        if (prev && prev.v !== null && Math.abs(prev.e - g.s) < 1e-6)
+          plan += `<line x1="${x(g.s)}" x2="${x(g.s)}" y1="${y(prev.v)}" y2="${y(g.v)}" stroke="var(--secondary-text-color)" stroke-width="1" stroke-dasharray="2 2"/>`;
+        [
+          [g.s, Math.min(g.e, nowM), 1],
+          [Math.max(g.s, nowM), g.e, 0.4],
+        ].forEach(([a, b, op]) => {
+          if (b <= a) return;
+          plan += `<g opacity="${op}"><line x1="${x(a)}" x2="${x(b)}" y1="${y(g.v)}" y2="${y(g.v)}" stroke="${col.accent}" stroke-opacity=".55" stroke-width="7" stroke-linecap="round"/>
+            <line x1="${x(a)}" x2="${x(b)}" y1="${y(g.v)}" y2="${y(g.v)}" stroke="${c}" stroke-width="5" stroke-linecap="round"/></g>`;
+        });
+        if (x(g.e) - x(g.s) >= 30 && (!prev || prev.v !== g.v))
+          plan += `<text class="pl" x="${x(g.s) + 4}" y="${y(g.v) - 7}">${this._fmt(g.v)}°</text>`;
+      });
+
+      // Mesure : points des tracés pour l'interpolation (zones de retard).
+      const pts = model.runs.flat();
+      const interp = (m) => {
+        for (let i = 0; i < pts.length - 1; i++) {
+          const [m0, v0] = pts[i];
+          const [m1, v1] = pts[i + 1];
+          if (m >= m0 && m <= m1) return m1 > m0 ? v0 + ((v1 - v0) * (m - m0)) / (m1 - m0) : v1;
+        }
+        return null;
+      };
+      let lagArea = "";
+      let pills = "";
+      model.lags.forEach((l) => {
+        if (l.e - l.s < 3) return;
+        const ms = [l.s];
+        for (let m = Math.ceil(l.s / 5) * 5; m < l.e; m += 5) ms.push(m);
+        ms.push(l.e);
+        const bottom = ms
+          .map((m) => [m, interp(m)])
+          .filter(([, v]) => v !== null)
+          .reverse()
+          .map(([m, v]) => `L${x(m)},${y(Math.min(v, l.t))}`)
+          .join(" ");
+        lagArea += `<path d="M${x(l.s)},${y(l.t)} L${x(l.e)},${y(l.t)} ${bottom} Z" fill="var(--heat)" opacity=".22"/>`;
+        if (!l.reached || l.e - l.s < 5) return;
+        const label = `+${fmtDuration(l.e - l.s, this._lang)}`;
+        const w = label.length * 6 + 14;
+        const cx = Math.max(L + w / 2, Math.min(W - R - w / 2, (x(l.s) + x(l.e)) / 2));
+        const startV = interp(l.s);
+        const cy = Math.min(T + PH - 12, r1((y(l.t) + y(startV === null ? l.from : Math.max(startV, lo))) / 2 + 8));
+        pills += `<rect x="${r1(cx - w / 2)}" y="${r1(cy - 8.5)}" width="${w}" height="17" rx="8.5" fill="var(--heat)"/>
+          <text class="pill" x="${r1(cx)}" y="${r1(cy + 3.5)}" text-anchor="middle">${esc(label)}</text>`;
+      });
+
+      const meas = model.runs
+        .map((run) => `<path d="${smoothPath(run.map(([m, v]) => [x(m), y(v)]))}" fill="none" stroke="var(--primary-text-color)" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>`)
+        .join("");
+
+      let now = "";
+      if (model.now !== null) {
+        now += `<line x1="${x(model.now)}" x2="${x(model.now)}" y1="${T - 6}" y2="${T + PH}" stroke="var(--secondary-text-color)" stroke-dasharray="3 3"/>`;
+        const last = model.last;
+        if (last && model.now - last.m < 1) {
+          const cy = y(last.t);
+          const ty = cy + 20 > T + PH ? cy - 10 : cy + 20;
+          const anchor = x(last.m) > W - R - 16 ? "end" : "middle";
+          now += `<circle cx="${x(last.m)}" cy="${cy}" r="5.5" fill="var(--primary-text-color)" stroke="var(--card-background-color, #fff)" stroke-width="2.5"/>
+            <text class="nowv" x="${x(last.m)}" y="${ty}" text-anchor="${anchor}">${this._fmt(Math.round(last.t * 10) / 10)}°</text>`;
+        }
+      }
+
+      let heat = "";
+      if (lane) {
+        heat = `<path transform="translate(${L - 20} ${ly + 1}) scale(0.5)" fill="var(--heat)" d="M17.66 11.2c-.23-.3-.51-.56-.77-.82-.67-.6-1.43-1.03-2.07-1.66C13.33 7.26 13 4.85 13.95 3c-.95.23-1.78.75-2.49 1.32-2.59 2.08-3.61 5.75-2.39 8.9.04.1.08.2.08.33 0 .22-.15.42-.35.5-.23.1-.47.04-.66-.12a.6.6 0 0 1-.14-.17c-1.13-1.43-1.31-3.48-.55-5.12C5.78 10 4.87 12.3 5 14.47c.06.5.12 1 .29 1.5.14.6.41 1.2.71 1.73 1.08 1.73 2.95 2.97 4.96 3.22 2.14.27 4.43-.12 6.07-1.6 1.83-1.66 2.47-4.32 1.53-6.6l-.13-.26c-.21-.46-.77-1.26-.77-1.26z"/>
+          <rect x="${L}" y="${ly}" width="${pw}" height="${LANE}" rx="4" fill="var(--secondary-background-color)"/>`;
+        model.heat.forEach((g) => {
+          heat += `<rect x="${x(g.s)}" y="${ly + 3}" width="${Math.max(3, r1(x(g.e) - x(g.s)))}" height="${LANE - 6}" rx="3" fill="var(--heat)"/>`;
+        });
+      }
+      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t.chartAria.replace("{day}", name))}">
+        ${grid}${lagArea}${plan}${meas}${pills}${now}${heat}
+        <g id="hov" visibility="hidden"><line id="hov-l" y1="${T}" y2="${T + PH}" stroke="var(--primary-text-color)" stroke-opacity=".35"/>
+          <circle id="hov-c" r="4" fill="var(--primary-text-color)" stroke="var(--card-background-color, #fff)" stroke-width="2"/></g>
+      </svg>`;
+    }
+
+    /** Bulle au survol / toucher : heure, pièce, prévu, chauffe. */
+    _onPlotPointer(e) {
+      const plot = e.target.closest && e.target.closest(".plot");
+      if (!plot) {
+        if (e.type === "pointerdown") this._hideTip();
+        return;
+      }
+      const model = this._model;
+      const g = this._geo;
+      const svg = plot.querySelector("svg");
+      const tip = plot.querySelector("#day-tip");
+      if (!model || !g || !svg || !tip) return;
+      const rect = svg.getBoundingClientRect();
+      if (!rect.width) return;
+      const px = ((e.clientX - rect.left) * g.W) / rect.width;
+      const m = Math.max(0, Math.min(model.len, ((px - g.L) / g.pw) * model.len));
+      const p = pointAt(model, m);
+      const t = this.t;
+      const hov = svg.querySelector("#hov");
+      const xm = g.x(m);
+      svg.querySelector("#hov-l").setAttribute("x1", xm);
+      svg.querySelector("#hov-l").setAttribute("x2", xm);
+      const c = svg.querySelector("#hov-c");
+      c.setAttribute("cx", xm);
+      c.setAttribute("cy", p.room === null ? -99 : g.y(p.room));
+      c.setAttribute("visibility", p.room === null ? "hidden" : "visible");
+      hov.setAttribute("visibility", "visible");
+      const lines = [`<div class="h">${esc(this._fmtTime(new Date(this._modelStart + m * 60000).toISOString()))}</div>`];
+      const sw = (inner, hh) => `<svg class="k" width="14" height="${hh}" aria-hidden="true">${inner}</svg>`;
+      if (p.room !== null)
+        lines.push(`<div>${sw('<line x1="0" x2="14" y1="2" y2="2" stroke="currentColor" stroke-width="2.25"/>', 4)}${esc(t.tipRoom)} <b>${this._fmt(Math.round(p.room * 10) / 10)}°</b></div>`);
+      if (p.plan !== null) {
+        const col = tempColors(p.plan, this._scale, this._dark, this._palette).bg;
+        lines.push(`<div>${sw(`<line x1="3" x2="11" y1="3" y2="3" stroke="${col}" stroke-width="5" stroke-linecap="round"/>`, 6)}${esc(t.tipPlan)} <b>${this._fmt(p.plan)}°</b></div>`);
+      }
+      if (p.heating !== null)
+        lines.push(
+          `<div>${sw(`<rect y="1" width="14" height="6" rx="2" fill="${p.heating ? "var(--heat)" : "var(--secondary-background-color)"}"/>`, 8)}${esc(p.heating ? t.tipHeatOn : t.tipHeatOff)}</div>`
+        );
+      tip.innerHTML = lines.join("");
+      tip.hidden = false;
+      const left = (xm / g.W) * 100;
+      tip.style.left = `${left}%`;
+      tip.style.top = `${((g.T + g.PH * 0.45) / g.H) * rect.height}px`;
+      tip.style.transform = `translate(${left > 55 ? "calc(-100% - 12px)" : "12px"}, -50%)`;
+    }
+
+    _hideTip() {
+      const tip = this.shadowRoot.getElementById("day-tip");
+      if (tip) tip.hidden = true;
+      const hov = this.shadowRoot.getElementById("hov");
+      if (hov) hov.setAttribute("visibility", "hidden");
     }
 
     // -- interactions ------------------------------------------------------
@@ -1714,6 +2522,15 @@
           this._error = (err && err.message) || "";
           this._updateSaveStatus();
         });
+      } else if (a === "day-prev" || a === "day-next") {
+        const off = this._dayOff + (a === "day-prev" ? 1 : -1);
+        if (off < 0 || off > this._histDays - 1) return;
+        this._dayOff = off;
+        this._updateDayPanel(a);
+        this._ensureDay();
+      } else if (a === "day-table") {
+        this._tableOpen = !this._tableOpen;
+        this._updateDayPanel(a);
       } else if (a === "planning-open") {
         this._expanded = true;
         this._returnFocus = '[data-action="planning-close"]';
@@ -1828,7 +2645,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector, cardFormat, ribbon, ribbonTicks, paletteOf, PALETTES };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector, cardFormat, ribbon, ribbonTicks, paletteOf, PALETTES, historyDays, findTargetSensor, histStates, holdSteps, valueAt, resample, measRuns, smoothPath, heatLags, meanDeviation, niceScale, dayModel, pointAt, valueRows };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);

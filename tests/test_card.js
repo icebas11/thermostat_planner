@@ -447,4 +447,154 @@ assert.equal(focusSelector({ dataset: {}, id: "layout-select" }), "#layout-selec
 assert.equal(focusSelector({ dataset: {} }), null);
 assert.equal(focusSelector(null), null);
 
+// ---- Panneau du jour : historique ------------------------------------------------
+const { historyDays, findTargetSensor, histStates, holdSteps, valueAt, resample, measRuns, smoothPath, heatLags, meanDeviation, niceScale, dayModel, pointAt, valueRows } = H;
+
+assert.equal(historyDays({}), 10);
+assert.equal(historyDays({ history_days: 3 }), 3);
+assert.equal(historyDays({ history_days: "" }), 10);
+assert.throws(() => historyDays({ history_days: 0 }), /history_days/);
+assert.throws(() => historyDays({ history_days: 2.5 }), /history_days/);
+
+// Capteur Consigne : plateforme + clé de traduction + appareil de l'entrée.
+const ENT = {
+  "sensor.salon_consigne": { entity_id: "sensor.salon_consigne", platform: "thermostat_planner", translation_key: "target", device_id: "d1" },
+  "sensor.bureau_consigne": { entity_id: "sensor.bureau_consigne", platform: "thermostat_planner", translation_key: "target", device_id: "d2" },
+  "sensor.salon_mode": { entity_id: "sensor.salon_mode", platform: "thermostat_planner", translation_key: "mode", device_id: "d1" },
+  "sensor.autre": { entity_id: "sensor.autre", platform: "other", translation_key: "target", device_id: "d1" },
+};
+const DEV = { d1: { config_entries: ["E1"] }, d2: { config_entries: ["E2"] } };
+assert.equal(findTargetSensor(ENT, DEV, "E2"), "sensor.bureau_consigne");
+assert.equal(findTargetSensor(ENT, DEV, "E1"), "sensor.salon_consigne");
+assert.equal(findTargetSensor(ENT, DEV, "E3"), null, "plusieurs candidats, aucun à l'entrée : rien");
+assert.equal(findTargetSensor({ a: ENT["sensor.salon_consigne"] }, {}, "E9"), "sensor.salon_consigne", "capteur unique : retenu");
+assert.equal(findTargetSensor(undefined, undefined, "E1"), null);
+
+// États compressés (secondes) ou complets (ISO), triés ; attributs repris sans `a`.
+const T0 = new Date(2026, 10, 7).getTime(); // samedi 7 nov. 2026, minuit local
+const sec = (h, m = 0) => (T0 + (h * 60 + m) * 60000) / 1000;
+const st = histStates([
+  { s: "heat", a: { current_temperature: 18 }, lu: sec(1) },
+  { s: "heat", a: { current_temperature: 17.5 }, lu: sec(0) },
+  { s: "heat", lu: sec(2) },
+  { state: "21", last_updated: new Date(T0 + 3 * 3600000).toISOString() },
+  { s: "x" },
+]);
+assert.deepEqual(st.map((x) => (x.at - T0) / 3600000), [0, 1, 2, 3]);
+assert.equal(st[2].a.current_temperature, 18, "sans attributs : ceux du précédent");
+assert.equal(st[3].s, "21");
+assert.deepEqual(histStates(undefined), []);
+
+// Paliers bornés au jour, fusionnés.
+const hs = holdSteps(histStates([{ s: "a", lu: (T0 - 3600000) / 1000 }, { s: "a", lu: sec(2) }, { s: "b", lu: sec(5) }]), T0, 600, (x) => x.s);
+assert.deepEqual(hs, [{ s: 0, e: 300, v: "a" }, { s: 300, e: 600, v: "b" }]);
+assert.equal(valueAt(hs, 299), "a");
+assert.equal(valueAt(hs, 300), "b");
+assert.equal(valueAt(hs, 600), "b", "fin de la dernière plage incluse");
+assert.equal(valueAt(hs, 601), null);
+
+// Rééchantillonnage pondéré par la durée.
+assert.deepEqual(resample([{ s: 0, e: 2, v: 18 }, { s: 2, e: 10, v: 19 }], 5), [{ s: 0, e: 5, v: 18.6 }, { s: 5, e: 10, v: 19 }]);
+assert.deepEqual(resample([{ s: 0, e: 4, v: null }, { s: 4, e: 5, v: 19 }], 5), [{ s: 0, e: 5, v: null }], "tranche surtout vide : trou");
+
+// Tracés : palier long tenu jusqu'à 10 min avant le suivant ; un trou coupe le tracé.
+assert.deepEqual(measRuns([{ s: 0, e: 60, v: 18 }, { s: 60, e: 65, v: 18.5 }, { s: 65, e: 90, v: 19 }, { s: 90, e: 120, v: null }, { s: 120, e: 130, v: 19 }]), [
+  [[0, 18], [50, 18], [60, 18.5], [65, 19], [90, 19]],
+  [[120, 19], [130, 19]],
+]);
+
+// Lissage monotone : passe par les points, pas de dépassement sur un palier.
+assert.equal(smoothPath([]), "");
+assert.equal(smoothPath([[1, 2]]), "M1,2");
+const sp = smoothPath([[0, 10], [10, 10], [20, 0], [30, 0]]);
+assert.ok(sp.startsWith("M0,10 C"), sp);
+assert.ok(sp.endsWith(" 30,0"), sp);
+sp.match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g).forEach((p) => {
+  const y = Number(p.split(",")[1]);
+  assert.ok(y >= 0 && y <= 10, `point de contrôle hors bornes : ${p}`);
+});
+
+// Retard de chauffe.
+const PLAN = [{ s: 0, e: 510, v: 17 }, { s: 510, e: 1020, v: 19 }, { s: 1020, e: 1440, v: 20 }];
+const MEAS = [{ s: 0, e: 540, v: 17.2 }, { s: 540, e: 570, v: 18.4 }, { s: 570, e: 580, v: 18.9 }, { s: 580, e: 1100, v: 19 }];
+assert.deepEqual(heatLags(PLAN, MEAS, 1100), [
+  { s: 510, e: 570, t: 19, from: 17, reached: true },
+  { s: 1020, e: 1100, t: 20, from: 19, reached: false },
+]);
+// Avant 17:00 : une seule hausse ; la pièce déjà au-dessus : retard nul.
+assert.deepEqual(heatLags(PLAN, MEAS, 900).length, 1);
+assert.deepEqual(heatLags(PLAN, [{ s: 0, e: 1440, v: 19.5 }], 900), [{ s: 510, e: 510, t: 19, from: 17, reached: true }]);
+// Sans mesure au début de la hausse : ignorée ; baisse ou trou de consigne : ignorés.
+assert.deepEqual(heatLags(PLAN, [{ s: 600, e: 900, v: 19 }], 900), []);
+assert.deepEqual(heatLags([{ s: 0, e: 600, v: 20 }, { s: 600, e: 900, v: 18 }, { s: 900, e: 1000, v: null }, { s: 1000, e: 1440, v: 21 }], MEAS, 1440), []);
+
+// Écart moyen pondéré.
+assert.ok(Math.abs(meanDeviation([{ s: 0, e: 30, v: 19.5 }, { s: 30, e: 90, v: 18.9 }], [{ s: 0, e: 1440, v: 19 }], 0, 90) - (0.5 * 30 - 0.1 * 60) / 90) < 1e-9);
+assert.equal(meanDeviation([{ s: 0, e: 5, v: 19 }], [{ s: 0, e: 5, v: 19 }], 0, 5), null, "moins de 10 min");
+assert.equal(meanDeviation([{ s: 0, e: 60, v: null }], [{ s: 0, e: 60, v: 19 }], 0, 60), null);
+
+// Échelle.
+assert.deepEqual(niceScale([17.2, 19, 20]), { lo: 16, hi: 21, step: 1 });
+assert.deepEqual(niceScale([19]), { lo: 17, hi: 20, step: 1 }, "au moins 3 °C");
+assert.deepEqual(niceScale([12, 22.4]), { lo: 10, hi: 24, step: 2 });
+assert.deepEqual(niceScale([null, NaN]), { lo: 16, hi: 21, step: 1 });
+
+// Modèle du jour : aujourd'hui à 14:40, consigne passée du capteur, à venir du planning.
+const climateHist = [
+  { s: "heat", a: { current_temperature: 17.4, hvac_action: "idle" }, lu: sec(0) },
+  { s: "heat", a: { current_temperature: 17.4, hvac_action: "heating" }, lu: sec(8, 30) },
+  { s: "heat", a: { current_temperature: 18.2, hvac_action: "heating" }, lu: sec(9) },
+  { s: "heat", a: { current_temperature: 19, hvac_action: "idle" }, lu: sec(9, 40) },
+  { s: "unavailable", a: {}, lu: sec(12) },
+  { s: "heat", a: { current_temperature: 19.1, hvac_action: "idle" }, lu: sec(12, 30) },
+];
+const targetHist = [{ s: "17", lu: sec(0) }, { s: "19", lu: sec(8, 30) }];
+const NOW = T0 + 880 * 60000;
+const model = dayModel({ climate: climateHist, target: targetHist, start: T0, end: T0 + 1440 * 60000, now: NOW, future: [{ s: 880, e: 1020, v: 19 }, { s: 1020, e: 1440, v: 20 }] });
+assert.equal(model.len, 1440);
+assert.equal(model.now, 880);
+assert.equal(model.planFromSchedule, false);
+assert.deepEqual(model.plan, [{ s: 0, e: 510, v: 17 }, { s: 510, e: 1020, v: 19 }, { s: 1020, e: 1440, v: 20 }]);
+assert.deepEqual(model.heat, [{ s: 510, e: 580, v: true }]);
+assert.equal(model.stats.heat, 70);
+assert.deepEqual(model.stats.lag, { s: 510, e: 580, t: 19, from: 17, reached: true });
+assert.equal(model.stats.devFrom, 580);
+// De 9:40 à 14:40 : 0 pendant 2 h 20, trou de 30 min, +0,1 pendant 2 h 10.
+assert.ok(Math.abs(model.stats.dev - (0.1 * 130) / 270) < 1e-9, String(model.stats.dev));
+assert.deepEqual(model.last, { m: 880, t: 19.1 });
+assert.equal(model.runs.length, 2, "indisponible : tracé coupé");
+assert.deepEqual(model.scale, { lo: 16, hi: 21, step: 1 });
+assert.deepEqual(pointAt(model, 545), { room: 18.2, plan: 19, heating: true });
+assert.deepEqual(pointAt(model, 1000), { room: null, plan: 19, heating: null }, "à venir : prévu seulement");
+const rows = valueRows(model, 60);
+assert.equal(rows.length, 24);
+assert.deepEqual(rows[8], { m: 480, room: 17.4, plan: 17, heat: 30 });
+assert.deepEqual(rows[9], { m: 540, room: 18.2, plan: 19, heat: 40 });
+assert.equal(rows[20].room, null);
+assert.equal(rows[20].heat, null);
+
+// Sans hvac_action ni capteur Consigne : pas de piste de chauffe, consigne d'après le planning.
+const m2 = dayModel({
+  climate: [{ s: "heat", a: { current_temperature: 18 }, lu: sec(0) }],
+  target: null,
+  start: T0,
+  end: T0 + 1440 * 60000,
+  now: null,
+  schedule: [{ s: 0, e: 600, v: 17 }, { s: 600, e: 1440, v: 17 }],
+});
+assert.equal(m2.heat, null);
+assert.equal(m2.stats.heat, null);
+assert.equal(m2.planFromSchedule, true);
+assert.deepEqual(m2.plan, [{ s: 0, e: 1440, v: 17 }]);
+assert.equal(m2.now, null);
+assert.equal(m2.upto, 1440, "jour passé : toute la journée");
+assert.equal(m2.stats.lag, null);
+assert.equal(m2.stats.devFrom, 0, "aucune hausse : écart depuis minuit");
+assert.ok(Math.abs(m2.stats.dev - 1) < 1e-9);
+// Jour sans historique.
+const m3 = dayModel({ climate: [], target: [], start: T0, end: T0 + 1440 * 60000, now: null });
+assert.deepEqual(m3.meas, []);
+assert.equal(m3.last, null);
+assert.equal(m3.stats.dev, null);
+
 console.log("js OK");

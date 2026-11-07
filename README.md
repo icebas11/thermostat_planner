@@ -49,6 +49,8 @@ show_controls: true         # facultatif : boutons − / + de réglage immédiat
 show_zone_away: true        # facultatif : interrupteur « Absent pour cette zone uniquement » (masqué par défaut)
 override_duration: 120      # facultatif : durée d'une dérogation en minutes (par défaut : jusqu'à la prochaine plage)
 palette: terre_cuite        # facultatif : nuancier des plages (terre_cuite par défaut), voir « Nuanciers »
+show_history: false         # facultatif : masquer le panneau du jour (affiché par défaut), voir « Panneau du jour »
+history_days: 10            # facultatif : jours consultables dans le panneau du jour, aujourd'hui compris (10 par défaut)
 colors:                     # facultatif : couleur des plages par paliers de température (prime sur palette)
   - max: 18
     color: "#3b82f6"
@@ -72,10 +74,36 @@ colors:                     # facultatif : couleur des plages par paliers de tem
   températures et affiche dessous la **liste de ses plages** (touche une plage pour la modifier) ; toucher à nouveau
   la ligne la referme. Par défaut, aujourd'hui est sélectionné à l'ouverture (`expand_today: false` pour ne rien
   sélectionner).
+- **Panneau du jour** : sous la grille, quand la ligne d'aujourd'hui est sélectionnée (voir ci-dessous).
 - **Copier vers…** : copie les plages du jour sélectionné vers les jours cochés, dans le même planning ou dans
   l'autre (par exemple *Vendredi* vers *Lundi*, *Mardi* et *Jeudi*, ou vers le planning Absent).
 - **Réglages** (replié) : mode de programmation des jours et pause de la planification.
 - En **lecture seule**, la carte l'indique au-dessus de la grille : on peut consulter les jours, sans modifier.
+
+### Panneau du jour (historique)
+Quand la ligne d'aujourd'hui est sélectionnée dans l'onglet du mode actif, la carte complète affiche sous la grille
+un graphique de la journée, tiré de l'historique de Home Assistant (recorder) :
+
+- **‹ Samedi 7 nov. ›** change de jour, dans la limite de `history_days` (10 jours par défaut, la durée de
+  conservation par défaut du recorder) ; à droite, l'heure actuelle ;
+- la **consigne prévue** en trait épais, dans la couleur de chaque plage ; ce qui reste à venir est estompé.
+  La consigne passée vient de l'historique du capteur **Consigne** de la zone (dérogations comprises), celle à venir
+  du planning ;
+- la **température mesurée** (attribut `current_temperature` du thermostat) en courbe lissée, avec un point et sa
+  valeur pour l'instant présent ;
+- le **retard de chauffe** en orange translucide, entre le début d'une hausse de consigne et le moment où la pièce
+  l'atteint (à 0,15 °C près), avec sa durée (« +1 h 10 ») ;
+- une **piste de chauffe** sous le graphique : les périodes où le thermostat chauffe (`hvac_action: heating`),
+  absente si le thermostat ne publie pas `hvac_action` ;
+- au survol ou au toucher, une bulle donne l'heure, la température de la pièce, la consigne prévue et la chauffe ;
+- trois chiffres : le temps mis pour atteindre la consigne après la dernière hausse (« non atteinte » sinon), la
+  durée de chauffe depuis minuit, et l'écart moyen entre la pièce et la consigne depuis qu'elle est atteinte ;
+- **Voir les valeurs** ouvre un tableau heure par heure (pièce, consigne, minutes de chauffe), lisible au lecteur
+  d'écran.
+
+Si le thermostat est exclu du recorder ou si le jour a été purgé, le panneau l'indique. Sans historique du capteur
+Consigne, la consigne passée est reconstituée d'après le planning actuel (c'est signalé). L'historique est
+rechargé toutes les 5 minutes pour aujourd'hui. `show_history: false` masque le panneau.
 
 ### Carte compacte (`format: compact`)
 Pour un tableau de bord mobile ou une carte par zone, `format: compact` affiche seulement l'essentiel, sur
