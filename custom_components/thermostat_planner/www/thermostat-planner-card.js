@@ -341,36 +341,137 @@
     });
   }
 
+  // ---- Nuanciers (option `palette`) ------------------------------------
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const rgbHex = (rgb) => "#" + rgb.map((c) => Math.round(c).toString(16).padStart(2, "0")).join("");
+  /** h en degrés, s et l de 0 à 100 → [r, g, b] de 0 à 255. */
+  function hslRgb(h, s, l) {
+    s /= 100;
+    l /= 100;
+    const f = (n) => {
+      const k = (n + h / 30) % 12;
+      return 255 * (l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1)));
+    };
+    return [f(0), f(8), f(4)];
+  }
+  /** [r, g, b] de 0 à 255 → [h en degrés, s et l de 0 à 1]. */
+  function rgbHsl(rgb) {
+    const [r, g, b] = rgb.map((c) => c / 255);
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    const d = max - min;
+    if (!d) return [0, 0, l];
+    const s = d / (1 - Math.abs(2 * l - 1));
+    const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [(h * 60 + 360) % 360, s, l];
+  }
+  /** Luminance relative WCAG d'un [r, g, b] de 0 à 255. */
+  function luminance(rgb) {
+    const [r, g, b] = rgb.map((c) => {
+      const x = c / 255;
+      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+  /** Interpolation entre des repères [[k, "#rrggbb"], …], k de 0 à 1. */
+  function ramp(stops, k) {
+    k = clamp01(k);
+    let i = 0;
+    while (i < stops.length - 2 && k > stops[i + 1][0]) i++;
+    const [k0, c0] = stops[i];
+    const [k1, c1] = stops[i + 1];
+    const u = clamp01((k - k0) / (k1 - k0));
+    const a = hexRgb(c0);
+    const b = hexRgb(c1);
+    return a.map((x, j) => x + (b[j] - x) * u);
+  }
+  // L'essentiel des consignes d'un planning tient entre 16 et 21 °C : c'est là que les couleurs varient.
+  const spread = (t) => clamp01((t - 16) / 5);
+  const COMFORT = 18.5; // seuil des nuanciers à deux rampes (froid / chaud)
+  /** Nuanciers : (température, thème sombre) → [r, g, b]. Aucun ne passe par le vert. */
+  const PALETTES = {
+    // Du sable à la brique : la teinte et la clarté changent ensemble.
+    terre_cuite: (t, dark) =>
+      ramp(
+        dark
+          ? [[0, "#3e3526"], [0.3, "#6e5427"], [0.55, "#a2602b"], [0.8, "#c9553a"], [1, "#e0614c"]]
+          : [[0, "#fbedc4"], [0.3, "#f7cd85"], [0.55, "#f09a52"], [0.8, "#dc5e3c"], [1, "#b2342d"]],
+        spread(t)
+      ),
+    // Caméra thermique : violet nuit, cramoisi, orange, jaune.
+    infrarouge: (t, dark) =>
+      ramp(
+        dark
+          ? [[0, "#2c1b4d"], [0.28, "#6b1f62"], [0.55, "#b6304e"], [0.8, "#ea6a2a"], [1, "#f7c548"]]
+          : [[0, "#46306e"], [0.28, "#8b2b6c"], [0.55, "#c8414a"], [0.8, "#ef8031"], [1, "#f5b73d"]],
+        spread(t)
+      ),
+    // Le ciel au fil de la journée : bleu nuit, ciel, crème, or, soleil.
+    nuit_jour: (t, dark) =>
+      ramp(
+        dark
+          ? [[0, "#1f2f5e"], [0.3, "#3a6aa8"], [0.5, "#8ab6dc"], [0.6, "#e6dcc0"], [0.72, "#e9c463"], [1, "#ef8530"]]
+          : [[0, "#2f4f8f"], [0.3, "#5f90c9"], [0.5, "#a9cbe8"], [0.6, "#f1e4c4"], [0.72, "#f0c862"], [1, "#e9792b"]],
+        spread(t)
+      ),
+    // Une seule teinte, de la cendre à la braise.
+    braise: (t, dark) => {
+      const k = spread(t);
+      return dark ? hslRgb(22, 20 + 72 * k, 16 + 46 * k) : hslRgb(24, 30 + 64 * k, 93 - 47 * k);
+    },
+    // Bleu glacier sous le seuil de confort, orange au-dessus, sans gris.
+    glace_feu: (t, dark) => {
+      const i = clamp01((Math.abs(t - COMFORT) + 0.5) / 3);
+      if (t < COMFORT) return dark ? hslRgb(198, 50 + 30 * i, 62 - 30 * i) : hslRgb(198, 60 + 25 * i, 86 - 40 * i);
+      return dark ? hslRgb(26, 65 + 25 * i, 64 - 18 * i) : hslRgb(26, 85, 84 - 36 * i);
+    },
+    // Bleu sous le seuil, rouge au-dessus, gris clair au seuil.
+    thermometre: (t, dark) => {
+      const i = clamp01(Math.abs(t - COMFORT) / 3);
+      if (Math.abs(t - COMFORT) < 0.01) return dark ? hslRgb(30, 6, 46) : hslRgb(30, 8, 88);
+      if (t < COMFORT) return dark ? hslRgb(212, 30 + 45 * i, 54 - 20 * i) : hslRgb(212, 50 + 30 * i, 86 - 34 * i);
+      return dark ? hslRgb(8, 38 + 40 * i, 56 - 16 * i) : hslRgb(8, 65 + 20 * i, 87 - 34 * i);
+    },
+  };
+  const DEFAULT_PALETTE = "terre_cuite";
+
+  /** Nuancier choisi par l'option `palette` (terre_cuite par défaut). */
+  function paletteOf(config) {
+    const p = config && config.palette;
+    if (p === undefined || p === null || p === "") return DEFAULT_PALETTE;
+    if (!Object.prototype.hasOwnProperty.call(PALETTES, p))
+      throw new Error(`thermostat-planner-card: palette doit valoir ${Object.keys(PALETTES).join(", ")}`);
+    return p;
+  }
+
   /**
-   * Palier configuré (premier qui correspond), sinon échelle par défaut adaptée au thème,
-   * sans passer par le vert : bleu ardoise (froid) qui se désature jusqu'à 18 °C,
-   * puis sable → corail (confort) qui se sature jusqu'à 22 °C.
-   * Thème clair : fonds clairs et texte foncé ; thème sombre : fonds sombres et texte clair.
+   * Couleurs d'une température : palier de l'option `colors` (premier qui correspond), sinon le
+   * nuancier `palette`, dans sa variante claire ou sombre. bg / fg : plage de la barre (texte noir
+   * ou blanc, le plus contrasté) ; accent / tint : température en couleur sur fond teinté (liste des plages).
    */
-  function tempColors(t, scale, dark) {
+  function tempColors(t, scale, dark, palette) {
     const hit =
       scale &&
       scale.find((c) => (c.min === undefined || t >= c.min) && (c.max === undefined || t <= c.max));
     if (hit) return hit;
-    const r = Math.max(0, Math.min(1, (t - 14) / 8)); // 14 °C → 22 °C
-    const cold = r < 0.5;
-    const k = cold ? 1 - r * 2 : (r - 0.5) * 2; // intensité 1 → 0 → 1
-    const h = Math.round(cold ? 214 : 40 - k * 26);
-    const sat = Math.round(14 + k * (cold ? 46 : 66));
-    const l = (x) => Math.round(x);
-    return dark
-      ? {
-          bg: `hsl(${h} ${sat}% ${l(27 + k * 9)}%)`,
-          fg: `hsl(${h} 80% 90%)`,
-          accent: `hsl(${h} ${sat + 10}% 68%)`,
-          tint: `hsl(${h} ${sat}% 50% / 0.16)`,
-        }
-      : {
-          bg: `hsl(${h} ${sat + 6}% ${l(86 - k * 18)}%)`,
-          fg: `hsl(${h} 60% 18%)`,
-          accent: `hsl(${h} ${sat + 10}% 36%)`,
-          tint: `hsl(${h} ${sat + 6}% 60% / 0.16)`,
-        };
+    const rgb = (PALETTES[palette] || PALETTES[DEFAULT_PALETTE])(Number(t), !!dark).map((c) => Math.round(c));
+    const lum = luminance(rgb);
+    const [h, s] = rgbHsl(rgb);
+    // Température en couleur sur un fond teinté : assez foncée (thème clair) ou claire (sombre).
+    let l = dark ? 78 : 32;
+    let accent = hslRgb(h, s * 100, l);
+    while (dark ? luminance(accent) < 0.42 && l < 96 : luminance(accent) > 0.12 && l > 6) {
+      l += dark ? 2 : -2;
+      accent = hslRgb(h, s * 100, l);
+    }
+    return {
+      bg: rgbHex(rgb),
+      fg: (lum + 0.05) / 0.05 >= 1.05 / (lum + 0.05) ? "#000000" : "#ffffff",
+      accent: rgbHex(accent),
+      tint: `rgb(${rgb.join(" ")} / 0.22)`,
+    };
   }
 
   /** Température au format local : virgule en français (20,5), point sinon (20.5). */
@@ -856,6 +957,7 @@
 
     setConfig(config) {
       this._scale = parseScale(config && config.colors);
+      this._palette = paletteOf(config);
       const target = targetOf(config);
       const changed = this._target !== undefined && JSON.stringify(target) !== JSON.stringify(this._target);
       this._target = target;
@@ -1137,7 +1239,7 @@
         .map((p) => {
           const w = ((p.end - p.start) / total) * 100;
           if (p.temp === null) return `<span class="c-seg none" style="width:${w}%">${w >= minPct ? "—" : ""}</span>`;
-          const c = tempColors(p.temp, this._scale, this._dark);
+          const c = tempColors(p.temp, this._scale, this._dark, this._palette);
           return `<span class="c-seg${p.ovr ? " hatch" : ""}" style="width:${w}%;--bg:${c.bg};--fg:${c.fg}">${w >= minPct ? this._fmt(p.temp) + "°" : ""}</span>`;
         })
         .join("");
@@ -1330,7 +1432,7 @@
           const segs = intervals(profile.schedules[r.key])
             .map((iv) => {
               const w = ((iv.e - iv.s) / 1440) * 100;
-              const c = tempColors(iv.t, this._scale, this._dark);
+              const c = tempColors(iv.t, this._scale, this._dark, this._palette);
               return `<span class="wseg" style="width:${w}%;--bg:${c.bg};--fg:${c.fg}">${sel && w >= labelMinPct ? this._fmt(iv.t) + "°" : ""}</span>`;
             })
             .join("");
@@ -1357,7 +1459,7 @@
       const name = this._rowName(key);
       const blocks = ivs
         .map((iv, i) => {
-          const c = tempColors(iv.t, this._scale, this._dark);
+          const c = tempColors(iv.t, this._scale, this._dark, this._palette);
           const inner = `<span><span class="range">${toStr(iv.s)} – ${toStr(iv.e)}</span><span class="deg">${this._fmt(iv.t)}°</span></span>`;
           const style = `--accent:${c.accent};--tint:${c.tint}`;
           return editable
@@ -1726,7 +1828,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector, cardFormat, ribbon, ribbonTicks };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector, cardFormat, ribbon, ribbonTicks, paletteOf, PALETTES };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);

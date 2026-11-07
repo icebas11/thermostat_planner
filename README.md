@@ -48,7 +48,8 @@ expand_today: false         # facultatif : ne pas sélectionner aujourd'hui à l
 show_controls: true         # facultatif : boutons − / + de réglage immédiat (true par défaut)
 show_zone_away: true        # facultatif : interrupteur « Absent pour cette zone uniquement » (masqué par défaut)
 override_duration: 120      # facultatif : durée d'une dérogation en minutes (par défaut : jusqu'à la prochaine plage)
-colors:                     # facultatif : couleur des plages par paliers de température
+palette: terre_cuite        # facultatif : nuancier des plages (terre_cuite par défaut), voir « Nuanciers »
+colors:                     # facultatif : couleur des plages par paliers de température (prime sur palette)
   - max: 18
     color: "#3b82f6"
   - max: 22
@@ -130,10 +131,26 @@ titre par défaut est alors suivi du nom de la zone.
 
 Les droits de modification du planning (*Restreindre la modification du planning*) se règlent par zone.
 
+### Nuanciers (`palette`)
+La couleur des plages suit la température. L'option `palette` choisit le nuancier, avec une variante pour le
+thème clair et une pour le thème sombre de Home Assistant. Les couleurs varient surtout entre 16 et 21 °C, là où
+se trouvent les consignes d'un planning ; aucun nuancier ne passe par le vert.
+
+| `palette` | Nuancier |
+|---|---|
+| `terre_cuite` (par défaut) | du sable à la brique : pâle pour le frais, rouge brique pour le chaud |
+| `infrarouge` | caméra thermique : violet nuit, cramoisi, orange, jaune |
+| `nuit_jour` | le ciel : bleu nuit, bleu, ciel, crème, or, soleil orangé |
+| `braise` | une seule teinte, de la cendre à la braise (le plus sobre) |
+| `glace_feu` | bleu glacier sous 18,5 °C, orange au-dessus, de plus en plus intense en s'éloignant de 18,5 °C |
+| `thermometre` | bleu sous 18,5 °C, rouge au-dessus, gris clair à 18,5 °C |
+
+Le texte posé sur les plages est noir ou blanc, le plus contrasté des deux.
+
 ### Couleurs par paliers
 Chaque palier accepte `min` et/ou `max` (bornes **incluses**, en °C), `color` (obligatoire, toute couleur CSS)
 et `text_color` (facultatif, sinon noir ou blanc selon le contraste). Le **premier** palier qui correspond
-s'applique ; une température qui ne correspond à aucun palier garde le dégradé par défaut (bleu → ambre).
+s'applique ; une température qui ne correspond à aucun palier garde la couleur du nuancier (`palette`).
 
 Avec l'exemple ci-dessus : ≤ 18 ° → bleu, 18,5 à 22 ° → vert, ≥ 22,5 ° → orange.
 

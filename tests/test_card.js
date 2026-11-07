@@ -195,20 +195,15 @@ assert.equal(zoneAwayDisplay({ show_zone_away: "true" }, { zone_away: false }), 
 assert.equal(zoneAwayDisplay({ show_zone_away: true }, { data: {} }), null, "ancien serveur sans zone_away");
 assert.equal(zoneAwayDisplay(undefined, null), null);
 
-// ---- Échelle de couleurs par défaut (tempColors) ------------------------------
-const { tempColors, parseScale, fmtTemp, targetAt, upcoming } = H;
-/** "hsl(h s% l% / a)" → { rgb: [0-1]×3, a }. */
-function hsl(str) {
-  const m = str.match(/^hsl\((\d+) (\d+)% (\d+)%(?: \/ ([\d.]+))?\)$/);
-  assert.ok(m, `couleur hsl attendue : ${str}`);
-  const [h, s, l] = [Number(m[1]), Number(m[2]) / 100, Number(m[3]) / 100];
-  const f = (n) => {
-    const k = (n + h / 30) % 12;
-    return l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-  };
-  return { h, s, rgb: [f(0), f(8), f(4)], a: m[4] === undefined ? 1 : Number(m[4]) };
-}
+// ---- Nuanciers (tempColors / paletteOf) ---------------------------------------
+const { tempColors, parseScale, fmtTemp, targetAt, upcoming, paletteOf, PALETTES } = H;
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+/** "rgb(r g b / a)" → { rgb: [0-1]×3, a }. */
+function rgba(str) {
+  const m = str.match(/^rgb\((\d+) (\d+) (\d+) \/ ([\d.]+)\)$/);
+  assert.ok(m, `couleur rgb attendue : ${str}`);
+  return { rgb: [m[1], m[2], m[3]].map((x) => Number(x) / 255), a: Number(m[4]) };
+}
 const lum = (rgb) =>
   rgb
     .map((x) => (x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4)))
@@ -218,33 +213,65 @@ const contrast = (a, b) => {
   return (x + 0.05) / (y + 0.05);
 };
 const over = (c, base) => c.rgb.map((x, i) => x * c.a + base[i] * (1 - c.a));
+/** Teinte en degrés d'un [r, g, b] de 0 à 1 (et saturation, pour écarter les quasi-gris). */
+function hueSat(rgb) {
+  const [r, g, b] = rgb;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (!d) return { h: 0, s: 0 };
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return { h: (h * 60 + 360) % 360, s: d / (1 - Math.abs(max + min - 1)) };
+}
 // Fonds de carte du thème par défaut de Home Assistant (clair / sombre).
 const CARD = { light: hex("#ffffff"), dark: hex("#1c1c1c") };
-for (const theme of ["light", "dark"]) {
-  for (let t = 5; t <= 35; t += 0.5) {
-    const c = tempColors(t, null, theme === "dark");
-    const bg = hsl(c.bg);
-    // Texte posé sur les plages de la barre : contraste AA (4,5:1).
-    assert.ok(contrast(bg.rgb, hsl(c.fg).rgb) >= 4.5, `${theme} ${t}° : texte sur la plage`);
-    // Température en couleur sur le fond teinté des plages de la liste.
-    const tint = over(hsl(c.tint), CARD[theme]);
-    assert.ok(contrast(hsl(c.accent).rgb, tint) >= 4.5, `${theme} ${t}° : température de la liste`);
-    // Pas de vert : teintes hors 75–165, sauf quasi-gris.
-    assert.ok(bg.s < 0.2 || bg.h < 75 || bg.h > 165, `${theme} ${t}° : teinte ${bg.h} (vert)`);
+const NAMES = Object.keys(PALETTES);
+assert.deepEqual(NAMES, ["terre_cuite", "infrarouge", "nuit_jour", "braise", "glace_feu", "thermometre"]);
+for (const name of NAMES) {
+  for (const theme of ["light", "dark"]) {
+    for (let t = 5; t <= 35; t += 0.5) {
+      const c = tempColors(t, null, theme === "dark", name);
+      const bg = hex(c.bg);
+      // Texte posé sur les plages de la barre : contraste AA (4,5:1).
+      assert.ok(contrast(bg, hex(c.fg)) >= 4.5, `${name} ${theme} ${t}° : texte sur la plage`);
+      // Température en couleur sur le fond teinté des plages de la liste.
+      const tint = over(rgba(c.tint), CARD[theme]);
+      assert.ok(contrast(hex(c.accent), tint) >= 4.5, `${name} ${theme} ${t}° : température de la liste`);
+      // Pas de vert : teintes hors 75–165, sauf quasi-gris.
+      const { h, s } = hueSat(bg);
+      assert.ok(s < 0.2 || h < 75 || h > 165, `${name} ${theme} ${t}° : teinte ${Math.round(h)} (vert)`);
+    }
+    // Deux demi-degrés courants voisins ne donnent jamais la même couleur.
+    for (let t = 16; t < 21; t += 0.5) {
+      assert.notEqual(tempColors(t, null, theme === "dark", name).bg, tempColors(t + 0.5, null, theme === "dark", name).bg, `${name} ${theme} ${t}°`);
+    }
   }
-  // Thème clair : fonds clairs ; thème sombre : fonds sombres.
-  const l17 = lum(hsl(tempColors(17, null, theme === "dark").bg).rgb);
-  assert.ok(theme === "dark" ? l17 < 0.1 : l17 > 0.4, `${theme} : luminosité des fonds`);
+  assert.notEqual(tempColors(19, null, false, name).bg, tempColors(19, null, true, name).bg, `${name} : dépend du thème`);
 }
-// Les températures courantes d'un planning (17 / 20,5) se distinguent nettement.
-assert.ok(hsl(tempColors(17, null, false).bg).h > 180 && hsl(tempColors(20.5, null, false).bg).h < 45);
-assert.notEqual(tempColors(19, null, false).bg, tempColors(19, null, true).bg, "dépend du thème");
-// L'option `colors` prime, quel que soit le thème ; hors paliers, retour à l'échelle par défaut.
+// Nuanciers « d'une seule rampe » : la luminance varie toujours dans le même sens de 16 à 21 °C.
+for (const name of ["terre_cuite", "infrarouge", "braise"]) {
+  for (const theme of ["light", "dark"]) {
+    const L = [];
+    for (let t = 16; t <= 21; t += 0.5) L.push(lum(hex(tempColors(t, null, theme === "dark", name).bg)));
+    const up = L[L.length - 1] > L[0];
+    L.slice(1).forEach((x, i) => assert.ok(up ? x >= L[i] : x <= L[i], `${name} ${theme} : luminance monotone`));
+  }
+}
+// Terre cuite par défaut (sans palette, ou palette inconnue côté helper).
+assert.equal(tempColors(17, null, false).bg, tempColors(17, null, false, "terre_cuite").bg);
+assert.equal(tempColors(17, null, true, "nimporte").bg, tempColors(17, null, true, "terre_cuite").bg);
+assert.equal(paletteOf({}), "terre_cuite");
+assert.equal(paletteOf(undefined), "terre_cuite");
+assert.equal(paletteOf({ palette: "" }), "terre_cuite");
+assert.equal(paletteOf({ palette: "infrarouge" }), "infrarouge");
+assert.throws(() => paletteOf({ palette: "classique" }), /palette doit valoir terre_cuite, infrarouge/);
+assert.throws(() => paletteOf({ palette: "toString" }), /palette/);
+// L'option `colors` prime, quel que soit le thème et le nuancier ; hors paliers, retour au nuancier.
 const scale = parseScale([{ max: 18, color: "#123456", text_color: "#ffffff" }, { min: 21, color: "red", text_color: "black" }]);
-assert.equal(tempColors(17, scale, true).bg, "#123456");
+assert.equal(tempColors(17, scale, true, "infrarouge").bg, "#123456");
 assert.equal(tempColors(17, scale, false).fg, "#ffffff");
 assert.equal(tempColors(22, scale, false).bg, "red");
-assert.equal(tempColors(19.5, scale, true).bg, tempColors(19.5, null, true).bg);
+assert.equal(tempColors(19.5, scale, true, "braise").bg, tempColors(19.5, null, true, "braise").bg);
 assert.equal(parseScale(undefined), null);
 assert.throws(() => parseScale({}), /liste/);
 assert.throws(() => parseScale([{ min: 1 }]), /color/);
