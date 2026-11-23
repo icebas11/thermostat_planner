@@ -91,6 +91,8 @@
       inDur: "dans {d}",
       untilT: "{temp} jusqu'à {time}",
       dayAria: "Historique du jour",
+      showDay: "Afficher l'historique du jour",
+      hideDay: "Masquer l'historique du jour",
       dayPrev: "Jour précédent",
       dayNext: "Jour suivant",
       nowAt: "il est {time}",
@@ -206,6 +208,8 @@
       inDur: "in {d}",
       untilT: "{temp} until {time}",
       dayAria: "Day history",
+      showDay: "Show the day history",
+      hideDay: "Hide the day history",
       dayPrev: "Previous day",
       dayNext: "Next day",
       nowAt: "now {time}",
@@ -707,8 +711,23 @@
     return f;
   }
 
+  /** Historique activé (option `show_history`, vrai par défaut). */
+  function historyEnabled(config) {
+    return !(config && config.show_history === false);
+  }
+
   /**
-   * Ruban des `hours` prochaines heures à partir de `now` : [{ start, end, temp, ovr, at }],
+   * Panneau du jour affiché ? Il faut l'historique activé et un `hass.callWS` (`ws`). Format compact :
+   * la bascule du ruban (`open`). Carte complète : la ligne d'aujourd'hui sélectionnée (`todayRow`)
+   * dans l'onglet du mode effectif (`effectiveTab`).
+   */
+  function dayPanelVisible(v) {
+    if (!v.history || !v.ws) return false;
+    return v.compact ? !!v.open : !!(v.todayRow && v.effectiveTab);
+  }
+
+  /**
+   * Ruban des `hours` prochaines heures à partir de `now`: [{ start, end, temp, ovr, at }],
    * `start` / `end` en minutes depuis `now`, `at` la date de début. La dérogation (ovr: true) passe
    * avant le planning ; temp null si la planification est en pause. Plages voisines identiques fusionnées.
    * Liste vide si la planification est en pause et qu'il n'y a pas de dérogation.
@@ -1308,6 +1327,14 @@
     .c-side b { color: var(--primary-text-color); font-weight: 500; }
     .c-side .c-room b { font-size: 1rem; }
     .c-rib { margin-top: 14px; }
+    /* Ruban bascule du panneau du jour : toute la largeur, cible ≥ 44 px (barre + heures). */
+    .c-rib.tog { display: block; width: 100%; min-height: 48px; padding: 0; border: 0; background: none; color: inherit;
+      font: inherit; text-align: left; cursor: pointer; border-radius: 8px; -webkit-tap-highlight-color: transparent; }
+    .c-rib.tog .c-rib-in, .c-rib.tog .c-ticks { display: block; }
+    .c-rib.tog:hover .c-bar { filter: brightness(1.06); }
+    .c-rib.tog:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 3px; }
+    .c-rib.tog[aria-expanded="true"] .c-ticks span:first-child { color: var(--primary-color); }
+    ha-card.compact .day { margin-top: 4px; }
     .c-bar { display: flex; gap: 2px; height: 30px; border-radius: 8px; overflow: hidden; }
     .c-seg { min-width: 0; display: flex; align-items: center; padding-left: 8px; overflow: hidden; white-space: nowrap;
       background: var(--bg); color: var(--fg); font-size: .8125rem; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -1363,6 +1390,9 @@
       this._dayOff = 0;
       this._hist = {};
       this._tableOpen = false;
+      // Format compact : panneau du jour ouvert en touchant le ruban (fermé par défaut ; gardé en
+      // passant au planning complet et en revenant).
+      this._compactDayOpen = false;
       this._model = null;
       this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
       // Bulle du graphique : souris et toucher (pan-y laisse défiler la page verticalement).
@@ -1400,7 +1430,10 @@
       this._target = target;
       this._config = { ...config };
       const format = cardFormat(config);
-      if (format !== this._format) this._expanded = false;
+      if (format !== this._format) {
+        this._expanded = false;
+        this._compactDayOpen = false;
+      }
       this._format = format;
       if (changed) {
         // Autre zone (éditeur de carte) : nouvel abonnement.
@@ -1629,10 +1662,18 @@
         ? `<button class="sq" data-action="ovr-step" data-dir="-1" aria-label="${esc(t.lower)}">−</button>
            <button class="sq" data-action="ovr-step" data-dir="1" aria-label="${esc(t.raise)}">+</button>`
         : "";
+      // Ruban : bouton bascule du panneau du jour quand l'historique est disponible.
+      let rib = `<div class="c-rib" id="c-rib"></div>`;
+      if (this._ribbonToggle()) {
+        const open = this._compactDayOpen;
+        const label = open ? t.hideDay : t.showDay;
+        rib = `<button type="button" class="c-rib tog" data-action="day-toggle" aria-expanded="${open}"${open ? ' aria-controls="day-panel"' : ""} aria-label="${esc(label)}" aria-describedby="c-rib-desc" title="${esc(label)}"><span class="c-rib-in" id="c-rib"></span></button>`;
+        if (this._dayShown()) rib += `<section class="day" id="day-panel" aria-label="${esc(t.dayAria)}">${this._dayPanelInner()}</section>`;
+      }
       return `${top}
         <div class="c-hero"><span class="big" id="ctrl-val" aria-live="polite"></span><div class="c-side" id="c-side"></div></div>
         <div id="ctrl-info"></div>
-        <div class="c-rib" id="c-rib"></div>
+        ${rib}
         <div class="c-actions">${step}
           <button class="plan" data-action="planning-open" aria-label="${esc(t.openPlanningAria)}">${esc(t.openPlanning)}<span class="chev-r" aria-hidden="true"></span></button>
         </div>
@@ -1694,7 +1735,15 @@
         pieces
           .map((p) => t.untilT.replace("{temp}", p.temp === null ? "—" : `${this._fmt(p.temp)}°`).replace("{time}", endTime(p)))
           .join(", ");
+      // Dans le bouton bascule : pas de role="img" (enfants d'un bouton présentationnels), description à part.
+      if (this._ribbonToggle())
+        return `<span class="c-bar">${segs}</span><span class="c-ticks">${ticks}</span><span class="sr" id="c-rib-desc">${esc(label)}</span>`;
       return `<div role="img" aria-label="${esc(label)}"><div class="c-bar">${segs}</div><div class="c-ticks">${ticks}</div></div>`;
+    }
+
+    /** Format compact : le ruban ouvre / ferme le panneau du jour (historique activé et disponible). */
+    _ribbonToggle() {
+      return historyEnabled(this._config) && !!this._hass && typeof this._hass.callWS === "function";
     }
 
     // -- réglage courant du thermostat ---------------------------------------
@@ -2003,6 +2052,7 @@
         this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="compact">${this._compactHtml(ctitle, msg)}</ha-card>`;
         this._updateLive();
         this._updateSaveStatus();
+        this._ensureDay();
         if (focus) {
           const el = this.shadowRoot.querySelector(focus);
           if (el) el.focus();
@@ -2085,12 +2135,23 @@
     }
 
     // -- panneau du jour (historique) ------------------------------------------
-    /** Panneau affiché : option show_history, ligne d'aujourd'hui sélectionnée, onglet du mode actif. */
+    /**
+     * Panneau affiché (`dayPanelVisible`) : option show_history ; format compact, bascule du ruban ;
+     * carte complète, ligne d'aujourd'hui (`selKey`) sélectionnée dans l'onglet du mode actif.
+     */
     _dayShown(selKey) {
       const s = this._state;
-      if (!s || !selKey || (this._config && this._config.show_history === false)) return false;
-      if (!this._hass || typeof this._hass.callWS !== "function" || this._profile !== s.effective_mode) return false;
-      return gridRows(s.data.profiles[this._profile].layout, weekdayOf(new Date())).some((r) => r.key === selKey && r.today);
+      if (!s) return false;
+      const compact = this._isCompact();
+      return dayPanelVisible({
+        history: historyEnabled(this._config),
+        ws: !!this._hass && typeof this._hass.callWS === "function",
+        compact,
+        open: this._compactDayOpen,
+        todayRow:
+          !compact && !!selKey && gridRows(s.data.profiles[this._profile].layout, weekdayOf(new Date())).some((r) => r.key === selKey && r.today),
+        effectiveTab: this._profile === s.effective_mode,
+      });
     }
 
     /** Jour affiché : { off, start, end, key } (bornes à minuit, heure locale). */
@@ -2531,6 +2592,12 @@
       } else if (a === "day-table") {
         this._tableOpen = !this._tableOpen;
         this._updateDayPanel(a);
+      } else if (a === "day-toggle") {
+        // Format compact : le ruban ouvre le panneau sur le jour en cours, un second toucher le ferme.
+        this._compactDayOpen = !this._compactDayOpen;
+        if (this._compactDayOpen) this._dayOff = 0;
+        this._returnFocus = '[data-action="day-toggle"]';
+        this._render();
       } else if (a === "planning-open") {
         this._expanded = true;
         this._returnFocus = '[data-action="planning-close"]';
@@ -2645,7 +2712,7 @@
     }
   }
 
-  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector, cardFormat, ribbon, ribbonTicks, paletteOf, PALETTES, historyDays, findTargetSensor, histStates, holdSteps, valueAt, resample, measRuns, smoothPath, heatLags, meanDeviation, niceScale, dayModel, pointAt, valueRows };
+  ThermostatPlannerCard.helpers = { paint, applyEdit, removeBlock, suggestRange, seedLayout, stepSetpoint, scheduleLimits, keyFor, toMin, toStr, tempColors, parseScale, fmtTemp, targetAt, upcoming, targetOf, withTarget, defaultTitle, subscribeErrorKey, zoneAwayDisplay, gridRows, selectedRow, copyTargets, copyTo, fmtDuration, focusSelector, cardFormat, historyEnabled, dayPanelVisible, ribbon, ribbonTicks, paletteOf, PALETTES, historyDays, findTargetSensor, histStates, holdSteps, valueAt, resample, measRuns, smoothPath, heatLags, meanDeviation, niceScale, dayModel, pointAt, valueRows };
 
   if (!customElements.get("thermostat-planner-card")) {
     customElements.define("thermostat-planner-card", ThermostatPlannerCard);

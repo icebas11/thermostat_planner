@@ -597,4 +597,26 @@ assert.deepEqual(m3.meas, []);
 assert.equal(m3.last, null);
 assert.equal(m3.stats.dev, null);
 
+// ---- Panneau du jour : historyEnabled / dayPanelVisible -------------------
+const { historyEnabled, dayPanelVisible } = H;
+assert.equal(historyEnabled(undefined), true);
+assert.equal(historyEnabled({}), true, "show_history absent : activé");
+assert.equal(historyEnabled({ show_history: true }), true);
+assert.equal(historyEnabled({ show_history: false }), false);
+const vis = (o) => dayPanelVisible({ history: true, ws: true, compact: false, open: false, todayRow: false, effectiveTab: false, ...o });
+// Carte complète : ligne d'aujourd'hui dans l'onglet du mode effectif, inchangé.
+assert.equal(vis({ todayRow: true, effectiveTab: true }), true);
+assert.equal(vis({ todayRow: true, effectiveTab: false }), false, "onglet de l'autre profil");
+assert.equal(vis({ todayRow: false, effectiveTab: true }), false, "autre jour sélectionné");
+assert.equal(vis({ todayRow: true, effectiveTab: true, open: true }), true, "la bascule compacte n'y change rien");
+assert.equal(vis({ open: true }), false, "bascule compacte sans effet sur la carte complète");
+// Format compact : seulement la bascule du ruban (fermé par défaut).
+assert.equal(vis({ compact: true }), false, "compact : fermé par défaut");
+assert.equal(vis({ compact: true, open: true }), true);
+assert.equal(vis({ compact: true, open: false, todayRow: true, effectiveTab: true }), false, "compact : la grille ne compte pas");
+// show_history: false ou pas de callWS : jamais (donc aucun chargement d'historique).
+assert.equal(vis({ compact: true, open: true, history: false }), false);
+assert.equal(vis({ todayRow: true, effectiveTab: true, history: false }), false);
+assert.equal(vis({ compact: true, open: true, ws: false }), false);
+
 console.log("js OK");

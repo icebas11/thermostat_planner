@@ -82,7 +82,7 @@ colors:                     # facultatif : couleur des plages par paliers de tem
 
 ### Panneau du jour (historique)
 Quand la ligne d'aujourd'hui est sélectionnée dans l'onglet du mode actif, la carte complète affiche sous la grille
-un graphique de la journée, tiré de l'historique de Home Assistant (recorder) :
+(et la carte compacte sous son ruban, en le touchant) un graphique de la journée, tiré de l'historique de Home Assistant (recorder) :
 
 - **‹ Samedi 7 nov. ›** change de jour, dans la limite de `history_days` (10 jours par défaut, la durée de
   conservation par défaut du recorder) ; à droite, l'heure actuelle ;
@@ -103,7 +103,8 @@ un graphique de la journée, tiré de l'historique de Home Assistant (recorder) 
 
 Si le thermostat est exclu du recorder ou si le jour a été purgé, le panneau l'indique. Sans historique du capteur
 Consigne, la consigne passée est reconstituée d'après le planning actuel (c'est signalé). L'historique est
-rechargé toutes les 5 minutes pour aujourd'hui. `show_history: false` masque le panneau.
+rechargé toutes les 5 minutes pour aujourd'hui, et n'est chargé que lorsque le panneau est affiché.
+`show_history: false` masque le panneau (dans les deux formats).
 
 ### Carte compacte (`format: compact`)
 Pour un tableau de bord mobile ou une carte par zone, `format: compact` affiche seulement l'essentiel, sur
@@ -119,12 +120,16 @@ format: compact
 - la **consigne actuelle** en grand, la température de la pièce et le prochain changement
   (« → 20,5° à 20:30, dans 3 h 20 ») ;
 - pendant une dérogation, le même bandeau que la carte complète, avec **Reprendre le planning** ;
-- un **ruban des 12 prochaines heures** : la dérogation hachurée, puis les plages du planning ;
+- un **ruban des 12 prochaines heures** : la dérogation hachurée, puis les plages du planning. **Toucher le ruban**
+  affiche dessous le [panneau du jour](#panneau-du-jour-historique) (le même que dans la carte complète : jour en
+  cours du mode actif, ‹ › pour les jours précédents, bulle, **Voir les valeurs**) ; le toucher de nouveau le masque.
+  Le panneau est fermé à l'affichage de la carte et reste dans le même état après un passage par **Planning ›** /
+  **Réduire**. Avec `show_history: false`, le ruban n'est pas cliquable ;
 - les boutons **−** / **+** (masqués avec `show_controls: false`) et **Planning ›**, qui ouvre la carte complète
   à la place de la carte compacte (bouton **Réduire** pour revenir).
 
 On ne modifie pas le planning dans ce format. Les options `climate` / `entry_id`, `show_controls`,
-`override_duration` et `colors` s'appliquent ; sans `format`, la carte reste la carte complète.
+`override_duration`, `colors`, `palette`, `show_history` et `history_days` s'appliquent ; sans `format`, la carte reste la carte complète.
 
 ### Plusieurs thermostats (zones)
 Chaque thermostat est une **entrée** de l'intégration, avec son propre planning, ses dérogations et ses entités.
